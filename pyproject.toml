@@ -23,3 +23,41 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cabler"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "N", "C4", "PT", "S", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+files = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "integration: needs a running database",
+]
+
+[tool.coverage.run]
+source = ["cabler"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+
+[tool.poe.tasks]
+lint = "ruff check ."
+format = "ruff format ."
+format-check = "ruff format --check ."
+typecheck = "mypy"
+test = "pytest -m 'not integration' --cov --cov-report=term-missing"
+check = ["lint", "format-check", "typecheck", "test"]
