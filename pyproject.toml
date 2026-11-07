@@ -61,3 +61,4 @@ format-check = "ruff format --check ."
 typecheck = "mypy"
 test = "pytest -m 'not integration' --cov --cov-report=term-missing"
 check = ["lint", "format-check", "typecheck", "test"]
+test-int = "pytest -m integration"
