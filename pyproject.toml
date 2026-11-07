@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cabler"
+version = "0.1.0"
+description = "Optimal cable routing from wind farms to substations."
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "psycopg[binary]>=3.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=5",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "pre-commit>=3.8",
+    "poethepoet>=0.29",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cabler"]
