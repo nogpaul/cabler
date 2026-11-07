@@ -6,6 +6,7 @@ build-backend = "hatchling.build"
 name = "cabler"
 version = "0.1.0"
 description = "Optimal cable routing from wind farms to substations."
+readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "psycopg[binary]>=3.2",
