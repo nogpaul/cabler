@@ -1,0 +1,3 @@
+# Official pgRouting image: PostgreSQL 17 + PostGIS 3.5 + pgRouting 3.8.0, pinned to an exact tag.
+# A thin layer of our own is kept so extra packages or settings can be added without changing compose.
+FROM pgrouting/pgrouting:17-3.5-3.8.0

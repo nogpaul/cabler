@@ -1,0 +1,35 @@
+# One compose file for all environments. Select one with:
+#   python -m cabler.dbctl up <name>
+name: cabler-${CABLER_ENV:?set CABLER_ENV}
+
+services:
+  db:
+    build:
+      context: .
+      dockerfile: Dockerfile.db
+    image: cabler-db:pg17-postgis3.5-pgr3.8
+    container_name: cabler-${CABLER_ENV}-db
+    restart: unless-stopped
+    shm_size: 256mb
+    environment:
+      POSTGRES_DB: ${DB_NAME:?}
+      POSTGRES_USER: ${DB_SUPERUSER:?}
+      POSTGRES_PASSWORD: ${DB_SUPERUSER_PASSWORD:?}
+      CABLER_OWNER_PASSWORD: ${CABLER_OWNER_PASSWORD:?}
+      CABLER_APP_PASSWORD: ${CABLER_APP_PASSWORD:?}
+      CABLER_RO_PASSWORD: ${CABLER_RO_PASSWORD:?}
+    ports:
+      # Bound to localhost only.
+      - "127.0.0.1:${DB_PORT:?}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  pgdata:
+    name: cabler_${CABLER_ENV}_pgdata
