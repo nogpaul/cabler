@@ -78,3 +78,23 @@ def test_apply_pending_runs_only_new_migrations_and_records_them() -> None:
     assert "CREATE TABLE b ();" in executed
     assert "CREATE TABLE a ();" not in executed
     assert (2, "b", migrations[1].checksum) in [params for _, params in conn.calls]
+
+
+def test_main_up_applies_the_repository_migrations(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    conn = FakeConnection([])
+    monkeypatch.setattr(migrate.db, "connect", lambda role, environ=None: conn)
+    assert migrate.main(["up", "dev"]) == 0
+    assert conn.autocommit is True
+    assert "applied: [1" in capsys.readouterr().out
+
+
+def test_main_status_reports_pending_without_writing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    conn = FakeConnection([], table_exists=False)
+    monkeypatch.setattr(migrate.db, "connect", lambda role, environ=None: conn)
+    assert migrate.main(["status", "dev"]) == 0
+    assert "PENDING" in capsys.readouterr().out
+    assert not any("CREATE TABLE" in text for text, _ in conn.calls)

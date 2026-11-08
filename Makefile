@@ -6,7 +6,7 @@ PY := .venv/bin/python
 ENV ?= dev
 
 .DEFAULT_GOAL := help
-.PHONY: help setup env db-up db-down db-psql db-reset check test-int lock
+.PHONY: help setup env db-up db-down db-psql db-reset migrate migrate-status check test-int lock
 
 help: ## show this help
 > @grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
@@ -31,6 +31,12 @@ db-psql: ## open psql inside the database container
 db-reset: ## DELETE the data of $(ENV) and start again
 > $(PY) -m cabler.dbctl destroy $(ENV)
 > $(PY) -m cabler.dbctl up $(ENV)
+
+migrate: ## apply pending database migrations to $(ENV)
+> $(PY) -m cabler.migrate up $(ENV)
+
+migrate-status: ## show which migrations are applied on $(ENV)
+> $(PY) -m cabler.migrate status $(ENV)
 
 check: ## lint, format check, type check, unit tests
 > .venv/bin/poe check

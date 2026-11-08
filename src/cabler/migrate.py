@@ -3,10 +3,13 @@
 Migrations are plain ``.sql`` files in ``db/migrations`` named ``NNNN_description.sql``. They run in
 order, each inside its own transaction, as the owner role, and are recorded in
 ``meta.schema_migration`` with a checksum so that an edited, already-applied file is detected.
+
+Usage: python -m cabler.migrate {up,status} {dev,staging,production}
 """
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import re
 from dataclasses import dataclass
@@ -17,6 +20,7 @@ import psycopg
 from psycopg import sql
 
 from cabler import db
+from cabler.envgen import NAMES
 
 MIGRATIONS_DIR = db.REPO_ROOT / "db" / "migrations"
 FILENAME = re.compile(r"^(\d{4})_([a-z0-9_]+)\.sql$")
@@ -118,3 +122,27 @@ def apply_pending(
             conn.execute(migration.sql)
             conn.execute(record, (migration.version, migration.name, migration.checksum))
     return [m.version for m in todo]
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("action", choices=("up", "status"))
+    parser.add_argument("name", choices=NAMES)
+    args = parser.parse_args(argv)
+
+    migrations = discover()
+    with db.connect("owner", environ={"CABLER_ENV": args.name}) as conn:
+        conn.autocommit = True
+        if args.action == "up":
+            done = apply_pending(conn, migrations)
+            print(f"applied: {done}" if done else "nothing to apply")
+            return 0
+        recorded = applied_or_empty(conn)
+        for m in migrations:
+            state = "applied" if m.version in recorded else "PENDING"
+            print(f"{m.version:04d} {m.name:<30} {state}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

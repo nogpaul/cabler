@@ -8,6 +8,7 @@ PostgreSQL, PostGIS and pgRouting.
     make setup      # project-local Python 3.12 environment + dev tools
     make env        # env/dev.env with random passwords (gitignored)
     make db-up      # PostgreSQL 17 + PostGIS 3.5 + pgRouting 3.8 in Docker
+    make migrate    # apply database migrations
     make check      # lint, format, types, unit tests
     make test-int   # database gate tests
 
