@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="cabler-tests">
+  <!-- A delivery that lost most of power_hints.osm: only n106 survives. -->
+  <node id="106" version="1" timestamp="2026-01-01T10:00:00Z" lat="53.6300" lon="10.1300">
+    <tag k="power" v="substation"/>
+    <tag k="voltage" v="110000"/>
+    <tag k="substation" v="distribution"/>
+  </node>
+</osm>

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="cabler-tests">
+  <!-- power_hints.osm plus one substation at 40.0 N, 10.0 E, far outside Germany. -->
+  <node id="101" version="1" timestamp="2026-01-01T10:00:00Z" lat="53.5500" lon="10.0000">
+    <tag k="power" v="substation"/>
+    <tag k="name" v="Auf der Leitung"/>
+  </node>
+  <node id="102" version="1" timestamp="2026-01-01T10:00:00Z" lat="53.5600" lon="10.0100">
+    <tag k="power" v="substation"/>
+    <tag k="substation" v="minor_distribution"/>
+  </node>
+  <node id="103" version="1" timestamp="2026-01-01T10:00:00Z" lat="53.6000" lon="10.1000">
+    <tag k="power" v="substation"/>
+    <tag k="substation" v="minor_distribution"/>
+  </node>
+  <node id="104" version="1" timestamp="2026-01-01T10:00:00Z" lat="53.6100" lon="10.1100">
+    <tag k="power" v="substation"/>
+    <tag k="substation" v="transmission"/>
+  </node>
+  <node id="105" version="1" timestamp="2026-01-01T10:00:00Z" lat="53.6200" lon="10.1200">
+    <tag k="power" v="substation"/>
+  </node>
+  <node id="106" version="1" timestamp="2026-01-01T10:00:00Z" lat="53.6300" lon="10.1300">
+    <tag k="power" v="substation"/>
+    <tag k="voltage" v="110000"/>
+    <tag k="substation" v="distribution"/>
+  </node>
+  <node id="107" version="1" timestamp="2026-02-01T10:00:00Z" lat="40.0000" lon="10.0000">
+    <tag k="power" v="substation"/>
+    <tag k="voltage" v="110000"/>
+  </node>
+  <way id="100" version="1" timestamp="2026-01-01T10:00:00Z">
+    <nd ref="101"/>
+    <nd ref="102"/>
+    <tag k="power" v="line"/>
+    <tag k="voltage" v="110000"/>
+  </way>
+</osm>

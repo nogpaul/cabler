@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="cabler-tests">
+  <!-- A delivery without a single power object. -->
+  <node id="900" version="1" timestamp="2026-01-01T10:00:00Z" lat="53.5700" lon="10.0200">
+    <tag k="amenity" v="cafe"/>
+  </node>
+</osm>

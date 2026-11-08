@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="cabler-tests">
+  <!-- A 110 kV line (w100) and six substations, five without a tagged voltage:
+       n101 sits on the line, no other evidence          -> hv_candidate (line)
+       n102 sits on the line but is minor_distribution   -> conflict
+       n103 far away, minor_distribution                 -> likely_low_voltage
+       n104 far away, transmission                       -> hv_candidate (type)
+       n105 far away, no tags                            -> no_evidence
+       n106 tagged 110 kV                                -> not in the review queue -->
+  <node id="101" version="1" timestamp="2026-01-01T10:00:00Z" lat="53.5500" lon="10.0000">
+    <tag k="power" v="substation"/>
+    <tag k="name" v="Auf der Leitung"/>
+  </node>
+  <node id="102" version="1" timestamp="2026-01-01T10:00:00Z" lat="53.5600" lon="10.0100">
+    <tag k="power" v="substation"/>
+    <tag k="substation" v="minor_distribution"/>
+  </node>
+  <node id="103" version="1" timestamp="2026-01-01T10:00:00Z" lat="53.6000" lon="10.1000">
+    <tag k="power" v="substation"/>
+    <tag k="substation" v="minor_distribution"/>
+  </node>
+  <node id="104" version="1" timestamp="2026-01-01T10:00:00Z" lat="53.6100" lon="10.1100">
+    <tag k="power" v="substation"/>
+    <tag k="substation" v="transmission"/>
+  </node>
+  <node id="105" version="1" timestamp="2026-01-01T10:00:00Z" lat="53.6200" lon="10.1200">
+    <tag k="power" v="substation"/>
+  </node>
+  <node id="106" version="1" timestamp="2026-01-01T10:00:00Z" lat="53.6300" lon="10.1300">
+    <tag k="power" v="substation"/>
+    <tag k="voltage" v="110000"/>
+    <tag k="substation" v="distribution"/>
+  </node>
+  <way id="100" version="1" timestamp="2026-01-01T10:00:00Z">
+    <nd ref="101"/>
+    <nd ref="102"/>
+    <tag k="power" v="line"/>
+    <tag k="voltage" v="110000"/>
+  </way>
+</osm>
