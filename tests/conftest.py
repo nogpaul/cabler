@@ -1,10 +1,12 @@
 """Shared test fixtures."""
 
+import dataclasses
 from collections.abc import Callable
 from typing import Any, Self
 
 import pytest
 
+from cabler import sources
 from cabler.sources import SourceSpec
 
 SpecFactory = Callable[..., SourceSpec]
@@ -14,7 +16,12 @@ SpecFactory = Callable[..., SourceSpec]
 def make_spec() -> SpecFactory:
     """Build a valid :class:`SourceSpec` for a made-up publisher, with optional overrides."""
 
-    def build(max_bytes: int = 1000, url: str = "https://data.example.org/file.bin") -> SourceSpec:
+    def build(
+        max_bytes: int = 1000,
+        url: str = "https://data.example.org/file.bin",
+        load_kind: str | None = None,
+        load_themes: tuple[str, ...] = (),
+    ) -> SourceSpec:
         return SourceSpec(
             source_id="demo",
             title="Demo",
@@ -27,9 +34,21 @@ def make_spec() -> SpecFactory:
             allowed_hosts=("data.example.org", "cdn.example.org"),
             max_bytes=max_bytes,
             file_format="bin",
+            load_kind=load_kind,
+            load_themes=load_themes,
         )
 
     return build
+
+
+@pytest.fixture
+def itest_spec() -> SourceSpec:
+    """A real source definition under a made-up id, so database tests never touch real data.
+
+    The real sources may already have fetched versions in the test database; a test that used
+    them would depend on what was downloaded earlier.
+    """
+    return dataclasses.replace(sources.load_all()["osm_hamburg"], source_id="itest_source")
 
 
 class FakeResult:
