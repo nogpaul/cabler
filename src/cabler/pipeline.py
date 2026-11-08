@@ -3,6 +3,7 @@
 Usage: python -m cabler.pipeline list
        python -m cabler.pipeline register {dev,staging,production}
        python -m cabler.pipeline check {dev,staging,production} [SOURCE ...] [--json]
+       python -m cabler.pipeline fetch {dev,staging,production} SOURCE ... [--yes] [--force]
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from typing import Any
 
 import psycopg
 
-from cabler import checks, db, remote, sources
+from cabler import checks, db, fetch, remote, sources
 from cabler.envgen import NAMES
 from cabler.remote import RemoteError
 from cabler.sources import SourceSpec
@@ -74,6 +75,48 @@ def _run_checks(env: str, selected: list[SourceSpec], as_json: bool) -> int:
     return 1 if failures else 0
 
 
+def _human(size: int | None) -> str:
+    if size is None:
+        return "unknown size"
+    value = float(size)
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1000 or unit == "GB":
+            return f"{value:.1f} {unit}" if unit != "B" else f"{size} B"
+        value /= 1000
+    return f"{size} B"
+
+
+def _run_fetch(env: str, selected: list[SourceSpec], *, yes: bool, force: bool) -> int:
+    failures = 0
+    with db.connect("app", environ={"CABLER_ENV": env}) as conn:
+        conn.autocommit = True
+        _require_registered(conn, selected, env)
+        with remote.make_client() as client:
+            for spec in selected:
+                try:
+                    if not yes:
+                        plan = checks.check_source(conn, client, spec)
+                        wanted = force or plan.outcome != "unchanged"
+                        action = "would download" if wanted else "up to date, nothing to download"
+                        size = _human(plan.remote.content_length)
+                        print(f"{spec.source_id:<18} {action} ({size}) from {plan.remote.url}")
+                        continue
+                    result = fetch.fetch_source(conn, client, spec, fetch.raw_dir(env), force=force)
+                except RemoteError as exc:
+                    failures += 1
+                    print(f"ERROR {spec.source_id}: {exc}", file=sys.stderr)
+                    continue
+                where = result.path or "-"
+                shown = "up to date" if result.status == "skipped" else _human(result.size)
+                print(
+                    f"{result.status:<10} {spec.source_id:<18} {shown}  "
+                    f"sha256={(result.sha256 or '-')[:12]}  {where}"
+                )
+    if not yes and not failures:
+        print("Nothing was downloaded. Add --yes to download for real.")
+    return 1 if failures else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -86,6 +129,13 @@ def main(argv: list[str] | None = None) -> int:
     check.add_argument("name", choices=NAMES)
     check.add_argument("sources", nargs="*", help="source ids (default: all)")
     check.add_argument("--json", action="store_true", help="print machine-readable results")
+    fetch_cmd = commands.add_parser("fetch", help="download changed sources as immutable snapshots")
+    fetch_cmd.add_argument("name", choices=NAMES)
+    fetch_cmd.add_argument("sources", nargs="+", help="source ids to download")
+    fetch_cmd.add_argument(
+        "--yes", action="store_true", help="really download (default: plan only)"
+    )
+    fetch_cmd.add_argument("--force", action="store_true", help="download even if unchanged")
     args = parser.parse_args(argv)
 
     specs = sources.load_all()
@@ -96,6 +146,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.action == "check":
         return _run_checks(args.name, _select(specs, args.sources), args.json)
+
+    if args.action == "fetch":
+        selected = _select(specs, args.sources)
+        return _run_fetch(args.name, selected, yes=args.yes, force=args.force)
 
     with db.connect("app", environ={"CABLER_ENV": args.name}) as conn:
         for spec in specs.values():
