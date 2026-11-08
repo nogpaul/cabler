@@ -6,7 +6,7 @@ PY := .venv/bin/python
 ENV ?= dev
 
 .DEFAULT_GOAL := help
-.PHONY: help setup env db-up db-down db-psql db-reset migrate migrate-status sources register updates check test-int lock
+.PHONY: help setup env db-up db-down db-psql db-reset migrate migrate-status sources register updates fetch check test-int lock
 
 help: ## show this help
 > @grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
@@ -46,6 +46,9 @@ register: ## write sources and licences to the database of $(ENV)
 
 updates: ## ask the publishers whether any source changed, without downloading ($(ENV))
 > $(PY) -m cabler.pipeline check $(ENV)
+
+fetch: ## download sources into snapshots: make fetch SOURCES=osm_hamburg [YES=1] ($(ENV))
+> $(PY) -m cabler.pipeline fetch $(ENV) $(SOURCES) $(if $(YES),--yes,)
 
 check: ## lint, format check, type check, unit tests
 > .venv/bin/poe check

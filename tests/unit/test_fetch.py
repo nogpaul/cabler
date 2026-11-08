@@ -1,7 +1,10 @@
 import hashlib
+import json
+import stat
 from collections import namedtuple
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -84,3 +87,85 @@ def test_the_data_directory_can_be_configured(
     assert fetch.raw_dir("dev") == tmp_path / "dev" / "raw"
     monkeypatch.delenv("CABLER_DATA_DIR")
     assert fetch.data_root().name == "data"
+
+
+def test_fetch_stores_an_immutable_snapshot_and_records_it(
+    tmp_path: Path, make_spec: SpecFactory, fake_connection: Any
+) -> None:
+    client, methods = server()
+    conn = fake_connection()
+    result = fetch.fetch_source(conn, client, make_spec(), tmp_path)
+
+    assert result.status == "fetched"
+    assert result.version_id == 42
+    assert result.sha256 == SHA
+    assert result.path is not None
+    folder = tmp_path / result.path
+    assert folder.parent.name == "demo"
+    assert folder.name.endswith("_" + SHA[:12])
+    stored = folder / "file.bin"
+    assert stored.read_bytes() == BODY
+    assert stat.S_IMODE(stored.stat().st_mode) == 0o444
+    manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["sha256"] == SHA
+    assert manifest["licence_id"] == "dl-de/zero-2-0"
+    assert manifest["etag"] == '"v1"'
+    inserted = [
+        params for query, params in conn.calls if "INSERT INTO meta.source_version" in query
+    ]
+    assert inserted[0][5] == SHA
+    assert inserted[0][6] == result.path
+    assert any("'succeeded'" in s for s in conn.statements())
+    assert methods == ["HEAD", "GET"]
+    assert [p.name for p in (tmp_path / "demo").iterdir()] == [folder.name]
+
+
+def test_an_unchanged_source_is_skipped_without_downloading(
+    tmp_path: Path, make_spec: SpecFactory, fake_connection: Any
+) -> None:
+    client, methods = server()
+    conn = fake_connection(known_rows=[(3, '"v1"', None, len(BODY))])
+    result = fetch.fetch_source(conn, client, make_spec(), tmp_path)
+    assert result.status == "skipped"
+    assert result.version_id == 3
+    assert methods == ["HEAD"]
+    assert not (tmp_path / "demo").exists()
+
+
+def test_force_downloads_even_when_unchanged(
+    tmp_path: Path, make_spec: SpecFactory, fake_connection: Any
+) -> None:
+    client, methods = server()
+    conn = fake_connection(known_rows=[(3, '"v1"', None, len(BODY))])
+    result = fetch.fetch_source(conn, client, make_spec(), tmp_path, force=True)
+    assert result.status == "fetched"
+    assert methods == ["HEAD", "GET"]
+
+
+def test_identical_content_is_not_stored_twice_but_validators_are_refreshed(
+    tmp_path: Path, make_spec: SpecFactory, fake_connection: Any
+) -> None:
+    client, _ = server(etag='"v2"')
+    conn = fake_connection(known_rows=[(3, '"v1"', None, len(BODY))], duplicate_rows=[(3,)])
+    result = fetch.fetch_source(conn, client, make_spec(), tmp_path)
+    assert result.status == "duplicate"
+    assert result.version_id == 3
+    refreshed = [
+        params
+        for query, params in conn.calls
+        if query.strip().startswith("UPDATE meta.source_version")
+    ]
+    assert refreshed
+    assert refreshed[0][1] == '"v2"'
+    assert list((tmp_path / "demo").iterdir()) == []
+
+
+def test_a_failed_download_leaves_nothing_behind_and_is_recorded(
+    tmp_path: Path, make_spec: SpecFactory, fake_connection: Any
+) -> None:
+    client, _ = server(b"x" * 5000, announce=10)
+    conn = fake_connection()
+    with pytest.raises(TooLargeError):
+        fetch.fetch_source(conn, client, make_spec(max_bytes=1000), tmp_path)
+    assert list((tmp_path / "demo").iterdir()) == []
+    assert any("'failed'" in s for s in conn.statements())

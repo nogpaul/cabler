@@ -8,17 +8,21 @@ that fails, is too large or is incomplete leaves nothing behind.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import shutil
+import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
+import psycopg
 
-from cabler import db, remote
+from cabler import __version__, checks, db, remote, runs
 from cabler.remote import RemoteError, RemoteState, TooLargeError
 from cabler.sources import SourceSpec
 
@@ -116,3 +120,113 @@ def download(client: httpx.Client, spec: SourceSpec, directory: Path) -> Downloa
         msg = f"{spec.url}: incomplete download, got {size} of {state.content_length} bytes"
         raise DownloadError(msg)
     return Downloaded(target, digest.hexdigest(), size, state)
+
+
+DUPLICATE_SQL = "SELECT version_id FROM meta.source_version WHERE source_id = %s AND sha256 = %s"
+INSERT_SQL = """
+INSERT INTO meta.source_version
+    (source_id, remote_url, remote_etag, remote_last_modified, content_length, sha256,
+     local_path, status)
+VALUES (%s, %s, %s, %s, %s, %s, %s, 'fetched')
+RETURNING version_id
+"""
+REFRESH_SQL = """
+UPDATE meta.source_version
+SET remote_url = %s, remote_etag = %s, remote_last_modified = %s, content_length = %s
+WHERE version_id = %s
+"""
+
+
+def _write_manifest(
+    directory: Path, spec: SourceSpec, got: Downloaded, fetched_at: datetime
+) -> None:
+    modified = got.state.last_modified
+    manifest = {
+        "source_id": spec.source_id,
+        "requested_url": spec.url,
+        "final_url": got.state.url,
+        "file": got.path.name,
+        "size": got.size,
+        "sha256": got.sha256,
+        "etag": got.state.etag,
+        "last_modified": modified.isoformat() if modified else None,
+        "fetched_at": fetched_at.isoformat(),
+        "fetched_by": f"cabler-pipeline/{__version__}",
+        "licence_id": spec.licence_id,
+        "attribution": spec.attribution,
+    }
+    text = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+    (directory / "manifest.json").write_text(text, encoding="utf-8")
+
+
+def _fetch_new(
+    conn: psycopg.Connection[Any],
+    client: httpx.Client,
+    spec: SourceSpec,
+    raw: Path,
+    state: RemoteState,
+) -> FetchResult:
+    ensure_space(raw, state.content_length or spec.max_bytes)
+    parent = raw / spec.source_id
+    staging = parent / f".partial-{uuid.uuid4().hex}"
+    staging.mkdir(parents=True)
+    try:
+        got = download(client, spec, staging)
+        modified = got.state.last_modified
+        existing = conn.execute(DUPLICATE_SQL, (spec.source_id, got.sha256)).fetchone()
+        if existing is not None:
+            # Same bytes as a snapshot we already hold: keep one copy, refresh the validators so
+            # the next check can say "unchanged".
+            version_id = int(existing[0])
+            conn.execute(
+                REFRESH_SQL,
+                (got.state.url, got.state.etag, modified, got.state.content_length, version_id),
+            )
+            return FetchResult(spec.source_id, "duplicate", version_id, None, got.sha256, got.size)
+
+        fetched_at = datetime.now(UTC)
+        _write_manifest(staging, spec, got, fetched_at)
+        for item in staging.iterdir():
+            item.chmod(0o444)
+        final = parent / f"{fetched_at:%Y%m%dT%H%M%SZ}_{got.sha256[:12]}"
+        os.replace(staging, final)
+        local_path = str(final.relative_to(raw))
+        row = conn.execute(
+            INSERT_SQL,
+            (
+                spec.source_id,
+                got.state.url,
+                got.state.etag,
+                modified,
+                got.state.content_length,
+                got.sha256,
+                local_path,
+            ),
+        ).fetchone()
+        if row is None:
+            msg = f"{spec.source_id}: the snapshot could not be recorded"
+            raise FetchError(msg)
+        return FetchResult(spec.source_id, "fetched", int(row[0]), local_path, got.sha256, got.size)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
+def fetch_source(
+    conn: psycopg.Connection[Any],
+    client: httpx.Client,
+    spec: SourceSpec,
+    raw: Path,
+    *,
+    force: bool = False,
+) -> FetchResult:
+    """Run the fetch stage for one source: skip it if unchanged, otherwise store a new snapshot."""
+    with runs.recorded(conn, "fetch", spec.source_id) as run:
+        state = remote.head(client, spec)
+        known = checks.latest_known(conn, spec.source_id)
+        if not force and known is not None and checks.decide(state, known) == "unchanged":
+            result = FetchResult(spec.source_id, "skipped", known.version_id, None, None, None)
+        else:
+            result = _fetch_new(conn, client, spec, raw, state)
+        run.version_id = result.version_id
+        run.result = result.to_json()
+    return result
