@@ -10,6 +10,7 @@ PostgreSQL, PostGIS and pgRouting.
     make db-up      # PostgreSQL 17 + PostGIS 3.5 + pgRouting 3.8 in Docker
     make migrate    # apply database migrations
     make register   # write the data sources and their licences to the database
+    make updates    # ask publishers whether data changed (no download)
     make check      # lint, format, types, unit tests
     make test-int   # database gate tests
 
