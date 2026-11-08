@@ -54,7 +54,10 @@ class RemoteState:
 def make_client(transport: httpx.BaseTransport | None = None) -> httpx.Client:
     """An HTTP client that never follows redirects by itself."""
     return httpx.Client(
-        headers={"User-Agent": f"cabler-pipeline/{__version__}"},
+        headers={
+            "User-Agent": f"cabler-pipeline/{__version__}",
+            "Accept-Encoding": "identity",
+        },
         timeout=TIMEOUT,
         follow_redirects=False,
         transport=transport,
@@ -102,6 +105,25 @@ def _to_datetime(value: str | None) -> datetime | None:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
+def state_of(response: httpx.Response, spec: SourceSpec) -> RemoteState:
+    """Read the validators from a response and enforce the source's size limit."""
+    if not response.is_success:
+        msg = f"{spec.url}: the server answered {response.status_code}"
+        raise RemoteStatusError(msg)
+    state = RemoteState(
+        url=str(response.url),
+        etag=response.headers.get("etag"),
+        last_modified=_to_datetime(response.headers.get("last-modified")),
+        content_length=_to_int(response.headers.get("content-length")),
+    )
+    if state.content_length is not None and state.content_length > spec.max_bytes:
+        msg = (
+            f"{spec.url}: announced size {state.content_length} exceeds the limit {spec.max_bytes}"
+        )
+        raise TooLargeError(msg)
+    return state
+
+
 def head(client: httpx.Client, spec: SourceSpec) -> RemoteState:
     """Ask the publisher about the file. Falls back to a GET whose body is never read."""
     response = send(client, "HEAD", spec)
@@ -109,20 +131,6 @@ def head(client: httpx.Client, spec: SourceSpec) -> RemoteState:
         response.close()
         response = send(client, "GET", spec, stream=True)
     try:
-        if not response.is_success:
-            msg = f"{spec.url}: the server answered {response.status_code}"
-            raise RemoteStatusError(msg)
-        state = RemoteState(
-            url=str(response.url),
-            etag=response.headers.get("etag"),
-            last_modified=_to_datetime(response.headers.get("last-modified")),
-            content_length=_to_int(response.headers.get("content-length")),
-        )
+        return state_of(response, spec)
     finally:
         response.close()
-    if state.content_length is not None and state.content_length > spec.max_bytes:
-        msg = (
-            f"{spec.url}: announced size {state.content_length} exceeds the limit {spec.max_bytes}"
-        )
-        raise TooLargeError(msg)
-    return state
