@@ -1,0 +1,13 @@
+source_id = "corine_clc5_2021"
+title = "CORINE Land Cover 5 ha, Stand 2021 (CLC5-2021), UTM32s, GeoPackage"
+publisher = "Bundesamt für Kartographie und Geodäsie (BKG)"
+licence_id = "dl-de/by-2-0"
+licence_url = "https://www.govdata.de/dl-de/by-2-0"
+attribution = "© GeoBasis-DE / BKG (2026) dl-de/by-2-0"
+homepage = "https://gdz.bkg.bund.de/index.php/default/open-data/corine-land-cover-5-ha-stand-2021-clc5-2021.html"
+
+[download]
+url = "https://daten.gdz.bkg.bund.de/produkte/dlm/clc5_2021/aktuell/clc5_2021.utm32s.gpkg.zip"
+allowed_hosts = ["daten.gdz.bkg.bund.de"]
+max_bytes = 2_500_000_000
+format = "gpkg.zip"

@@ -1,0 +1,18 @@
+source_id = "nrw_dgm1"
+title = "Digitales Geländemodell NRW, Rasterweite 1 m (GeoTIFF), Einzelkacheln"
+publisher = "Land Nordrhein-Westfalen, Bezirksregierung Köln, Geobasis NRW"
+licence_id = "dl-de/zero-2-0"
+licence_url = "https://www.govdata.de/dl-de/zero-2-0"
+attribution = "Geobasis NRW, Land NRW (dl-de/zero-2-0)"
+homepage = "https://www.opengeodata.nrw.de/produkte/geobasis/hm/dgm1_tiff/dgm1_tiff/"
+
+[download]
+# The folder answers with an index of every tile (name, size, time); each tile is the folder URL
+# plus its name. max_bytes is the limit for one tile, not for the whole set.
+url = "https://www.opengeodata.nrw.de/produkte/geobasis/hm/dgm1_tiff/dgm1_tiff/"
+allowed_hosts = ["www.opengeodata.nrw.de"]
+max_bytes = 30_000_000
+format = "tif"
+
+[tiles]
+kind = "opengeodata_index"

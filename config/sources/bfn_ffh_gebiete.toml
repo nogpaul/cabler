@@ -1,0 +1,14 @@
+source_id = "bfn_ffh_gebiete"
+title = "Fauna-Flora-Habitat-Gebiete in Deutschland (BfN, WFS, GML 3.2); not suitable for planning purposes"
+publisher = "Bundesamt für Naturschutz (BfN)"
+licence_id = "GeoNutzV"
+licence_url = "https://www.gesetze-im-internet.de/geonutzv/"
+attribution = "Geofachdaten: Bundesamt für Naturschutz (BfN). Geobasisdaten: © GeoBasis-DE / BKG"
+homepage = "https://www.bfn.de/schutzgebiete"
+
+[download]
+url = "https://geodienste.bfn.de/ogc/wfs/schutzgebiet?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES=schutzgebiet:Fauna_Flora_Habitat_Gebiete&OUTPUTFORMAT=GML32%2BZIP&COUNT=100000"
+allowed_hosts = ["geodienste.bfn.de"]
+max_bytes = 600_000_000
+format = "gml.zip"
+probe = "none"

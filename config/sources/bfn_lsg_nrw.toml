@@ -1,0 +1,17 @@
+source_id = "bfn_lsg_nrw"
+title = "Landschaftsschutzgebiete, NRW box (BfN, WFS, GML 3.2); not suitable for planning purposes"
+publisher = "Bundesamt für Naturschutz (BfN)"
+licence_id = "GeoNutzV"
+licence_url = "https://www.gesetze-im-internet.de/geonutzv/"
+attribution = "Geofachdaten: Bundesamt für Naturschutz (BfN). Geobasisdaten: © GeoBasis-DE / BKG"
+homepage = "https://www.bfn.de/schutzgebiete"
+
+[download]
+# The whole layer (9,195 areas) is more than the service can build in one request (it answers 400
+# above roughly 4,000 features), so the layer is fetched per area of interest with a bounding box
+# in EPSG:25832: minx,miny,maxx,maxy. COUNT lifts the default page size of 500.
+url = "https://geodienste.bfn.de/ogc/wfs/schutzgebiet?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES=schutzgebiet:Landschaftsschutzgebiete&OUTPUTFORMAT=GML32%2BZIP&COUNT=100000&BBOX=270000,5560000,540000,5840000,urn:ogc:def:crs:EPSG::25832"
+allowed_hosts = ["geodienste.bfn.de"]
+max_bytes = 600_000_000
+format = "gml.zip"
+probe = "none"

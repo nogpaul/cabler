@@ -1,0 +1,15 @@
+source_id = "mastr_bulk"
+title = "Marktstammdatenregister, Gesamtdatenexport (all units, XML)"
+publisher = "Bundesnetzagentur"
+licence_id = "dl-de/by-2-0"
+licence_url = "https://www.govdata.de/dl-de/by-2-0"
+attribution = "© Bundesnetzagentur für Elektrizität, Gas, Telekommunikation, Post und Eisenbahnen, Marktstammdatenregister, dl-de/by-2-0"
+homepage = "https://www.marktstammdatenregister.de/MaStR/Datendownload"
+
+[download]
+# The current export carries its date in the file name, so this URL goes stale; a resolver that
+# reads the download page is planned. Dated quarterly exports live under /Stichtag/.
+url = "https://download.marktstammdatenregister.de/Gesamtdatenexport_20261108_26.2.zip"
+allowed_hosts = ["download.marktstammdatenregister.de"]
+max_bytes = 4_500_000_000
+format = "zip"

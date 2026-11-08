@@ -1,0 +1,16 @@
+source_id = "bfn_lsg_hamburg"
+title = "Landschaftsschutzgebiete, Hamburg box (BfN, WFS, GML 3.2); not suitable for planning purposes"
+publisher = "Bundesamt für Naturschutz (BfN)"
+licence_id = "GeoNutzV"
+licence_url = "https://www.gesetze-im-internet.de/geonutzv/"
+attribution = "Geofachdaten: Bundesamt für Naturschutz (BfN). Geobasisdaten: © GeoBasis-DE / BKG"
+homepage = "https://www.bfn.de/schutzgebiete"
+
+[download]
+# See bfn_lsg_nrw: the layer is fetched per area of interest because the service fails on the
+# whole layer. The box (EPSG:25832) is a little larger than the city state.
+url = "https://geodienste.bfn.de/ogc/wfs/schutzgebiet?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES=schutzgebiet:Landschaftsschutzgebiete&OUTPUTFORMAT=GML32%2BZIP&COUNT=100000&BBOX=455000,5910000,605000,5990000,urn:ogc:def:crs:EPSG::25832"
+allowed_hosts = ["geodienste.bfn.de"]
+max_bytes = 600_000_000
+format = "gml.zip"
+probe = "none"

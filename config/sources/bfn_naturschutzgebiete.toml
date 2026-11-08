@@ -1,0 +1,16 @@
+source_id = "bfn_naturschutzgebiete"
+title = "Naturschutzgebiete in Deutschland (BfN, WFS, GML 3.2); not suitable for planning purposes"
+publisher = "Bundesamt für Naturschutz (BfN)"
+licence_id = "GeoNutzV"
+licence_url = "https://www.gesetze-im-internet.de/geonutzv/"
+attribution = "Geofachdaten: Bundesamt für Naturschutz (BfN). Geobasisdaten: © GeoBasis-DE / BKG"
+homepage = "https://www.bfn.de/schutzgebiete"
+
+[download]
+# A WFS cannot answer HEAD, so the update check is skipped and each fetch downloads; identical
+# content is stored once. COUNT lifts the service's default page size of 500 features.
+url = "https://geodienste.bfn.de/ogc/wfs/schutzgebiet?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES=schutzgebiet:Naturschutzgebiete&OUTPUTFORMAT=GML32%2BZIP&COUNT=100000"
+allowed_hosts = ["geodienste.bfn.de"]
+max_bytes = 600_000_000
+format = "gml.zip"
+probe = "none"

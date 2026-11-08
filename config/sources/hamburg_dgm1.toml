@@ -1,0 +1,13 @@
+source_id = "hamburg_dgm1"
+title = "Geländemodelle Hamburg - DGM, Rasterweite 1 m (GeoTIFF), Befliegung 2026"
+publisher = "Freie und Hansestadt Hamburg, Landesbetrieb Geoinformation und Vermessung (LGV)"
+licence_id = "dl-de/by-2-0"
+licence_url = "https://www.govdata.de/dl-de/by-2-0"
+attribution = "Freie und Hansestadt Hamburg, Landesbetrieb Geoinformation und Vermessung (LGV), dl-de/by-2-0"
+homepage = "https://metaver.de/trefferanzeige?docuuid=aeca28b5-503e-4e69-b796-eb0fbebbad0a"
+
+[download]
+url = "https://daten-hamburg.de/opendata/fernerkundung_hoehenmodelle/dgm/dgm1_hh_2026.zip"
+allowed_hosts = ["daten-hamburg.de", "www.daten-hamburg.de"]
+max_bytes = 2_500_000_000
+format = "zip"
