@@ -15,6 +15,8 @@ PostgreSQL, PostGIS and pgRouting.
     make load SOURCES=osm_hamburg    # load the fetched snapshot into the raw schema
     make diff SOURCES=osm_hamburg    # list what was added, changed or removed since the last snapshot
     make apply SOURCES=osm_hamburg   # bring the staging state (with history) up to date
+    make validate SOURCES=osm_hamburg # judge the snapshot (quarantine on error), collect voltage hints
+    make review SOURCES=osm_hamburg  # substations without a tagged voltage, with the evidence found
     make check      # lint, format, types, unit tests
     make test-int   # database gate tests
 

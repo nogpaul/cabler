@@ -7,6 +7,9 @@ Usage: python -m cabler.pipeline list
        python -m cabler.pipeline load {dev,staging,production} SOURCE ...
        python -m cabler.pipeline diff {dev,staging,production} SOURCE ...
        python -m cabler.pipeline apply {dev,staging,production} SOURCE ...
+       python -m cabler.pipeline validate {dev,staging,production} SOURCE ...
+       python -m cabler.pipeline review {dev,staging,production} SOURCE
+           [--suggestion S] [--limit N]
 """
 
 from __future__ import annotations
@@ -18,13 +21,14 @@ from typing import Any
 
 import psycopg
 
-from cabler import apply, checks, db, diff, fetch, load, remote, sources
+from cabler import apply, checks, db, diff, fetch, load, remote, sources, validate
 from cabler.apply import ApplyError
 from cabler.diff import DiffError
 from cabler.envgen import NAMES
 from cabler.load import LoadError
 from cabler.remote import RemoteError
 from cabler.sources import SourceSpec
+from cabler.validate import ValidateError
 
 
 def _select(specs: dict[str, SourceSpec], wanted: list[str]) -> list[SourceSpec]:
@@ -196,6 +200,58 @@ def _run_apply(env: str, selected: list[SourceSpec]) -> int:
     return 1 if failures else 0
 
 
+def _run_validate(env: str, selected: list[SourceSpec]) -> int:
+    failures = 0
+    with db.connect("app", environ={"CABLER_ENV": env}) as conn:
+        conn.autocommit = True
+        _require_registered(conn, selected, env)
+        for spec in selected:
+            try:
+                result = validate.validate_source(conn, spec)
+            except ValidateError as exc:
+                failures += 1
+                print(f"ERROR {spec.source_id}: {exc}", file=sys.stderr)
+                continue
+            if not result.steps:
+                print(f"{result.status:<10} {spec.source_id:<18} nothing new to validate")
+            for step in result.steps:
+                verdict = "PASSED" if step.outcome == "passed" else "QUARANTINED"
+                print(
+                    f"{result.status:<10} {spec.source_id:<18} {verdict}  "
+                    f"{step.errors} errors, {step.warnings} warnings  ({step.total:,} objects)"
+                )
+                for problem in step.problems:
+                    print(f"{'':<29}problem: {problem}")
+                if step.rules:
+                    found = ", ".join(f"{k} {n:,}" for k, n in step.rules.items())
+                    print(f"{'':<29}findings: {found}")
+                if step.outcome == "quarantined":
+                    failures += 1
+    return 1 if failures else 0
+
+
+def _run_review(env: str, spec: SourceSpec, suggestion: str | None, limit: int) -> int:
+    with db.connect("app", environ={"CABLER_ENV": env}) as conn:
+        counts = validate.review_counts(conn, spec.source_id)
+        if not counts:
+            print(f"{spec.source_id}: nothing to review (validate the source first)")
+            return 0
+        summary = ", ".join(f"{k} {n:,}" for k, n in counts.items())
+        print(f"{spec.source_id}: substations without a tagged voltage: {summary}")
+        for row in validate.review_rows(conn, spec.source_id, suggestion, limit):
+            key, kind, name, operator, subtype, line_v, line_d, type_hint, lon, lat = row
+            evidence = []
+            if line_v is not None:
+                evidence.append(f"line {line_v:,} V at {line_d} m")
+            if type_hint:
+                evidence.append(f"type {subtype or '-'} -> {type_hint}")
+            print(
+                f"  {key:<14} {kind:<18} {name or operator or '-':<28.28} "
+                f"{'; '.join(evidence) or 'no evidence':<44} {lon},{lat}"
+            )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -224,6 +280,14 @@ def main(argv: list[str] | None = None) -> int:
     apply_cmd = commands.add_parser("apply", help="apply diffed snapshots to the staging state")
     apply_cmd.add_argument("name", choices=NAMES)
     apply_cmd.add_argument("sources", nargs="+", help="source ids to apply")
+    validate_cmd = commands.add_parser("validate", help="judge applied snapshots")
+    validate_cmd.add_argument("name", choices=NAMES)
+    validate_cmd.add_argument("sources", nargs="+", help="source ids to validate")
+    review_cmd = commands.add_parser("review", help="list substations needing a voltage decision")
+    review_cmd.add_argument("name", choices=NAMES)
+    review_cmd.add_argument("source", help="source id")
+    review_cmd.add_argument("--suggestion", help="only this suggestion")
+    review_cmd.add_argument("--limit", type=int, default=20, help="rows to show")
     args = parser.parse_args(argv)
 
     specs = sources.load_all()
@@ -247,6 +311,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.action == "apply":
         return _run_apply(args.name, _select(specs, args.sources))
+
+    if args.action == "validate":
+        return _run_validate(args.name, _select(specs, args.sources))
+
+    if args.action == "review":
+        (spec,) = _select(specs, [args.source])
+        return _run_review(args.name, spec, args.suggestion, args.limit)
 
     with db.connect("app", environ={"CABLER_ENV": args.name}) as conn:
         for spec in specs.values():
