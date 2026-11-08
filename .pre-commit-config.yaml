@@ -18,3 +18,9 @@ repos:
         language: system
         pass_filenames: false
         types: [python]
+      - id: pytest
+        name: unit tests
+        entry: .venv/bin/python -m pytest -q --no-cov -m "not integration"
+        language: system
+        pass_filenames: false
+        types: [python]
