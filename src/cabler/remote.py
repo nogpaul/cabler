@@ -18,7 +18,7 @@ from cabler.sources import SourceSpec
 
 MAX_REDIRECTS = 5
 FALLBACK_STATUSES = frozenset({405, 501})
-TIMEOUT = httpx.Timeout(30.0, connect=10.0)
+TIMEOUT = httpx.Timeout(180.0, connect=10.0)
 
 
 class RemoteError(Exception):
@@ -35,6 +35,10 @@ class TooManyRedirectsError(RemoteError):
 
 class RemoteStatusError(RemoteError):
     """The publisher answered with an error status."""
+
+
+class ConnectionFailedError(RemoteError):
+    """The publisher could not be reached, or stopped answering (timeout, reset, DNS)."""
 
 
 class TooLargeError(RemoteError):
@@ -78,7 +82,11 @@ def send(
         if not _allowed(url, spec):
             msg = f"refusing {url}: not an https URL on an allowed host {list(spec.allowed_hosts)}"
             raise HostNotAllowedError(msg)
-        response = client.send(client.build_request(method, url), stream=stream)
+        try:
+            response = client.send(client.build_request(method, url), stream=stream)
+        except httpx.TransportError as exc:
+            msg = f"{url}: {type(exc).__name__}: {exc}"
+            raise ConnectionFailedError(msg) from exc
         if not response.is_redirect:
             return response
         location = response.headers["location"]
@@ -125,7 +133,16 @@ def state_of(response: httpx.Response, spec: SourceSpec) -> RemoteState:
 
 
 def head(client: httpx.Client, spec: SourceSpec) -> RemoteState:
-    """Ask the publisher about the file. Falls back to a GET whose body is never read."""
+    """Ask the publisher about the file. Falls back to a GET whose body is never read.
+
+    A source with ``probe = "none"`` (a service that cannot answer HEAD, such as a WFS)
+    is not asked: nothing is known about it, so the check says so and a fetch downloads.
+    """
+    if spec.probe == "none":
+        if not _allowed(spec.url, spec):
+            msg = f"refusing {spec.url}: not an https URL on an allowed host"
+            raise HostNotAllowedError(msg)
+        return RemoteState(url=spec.url, etag=None, last_modified=None, content_length=None)
     response = send(client, "HEAD", spec)
     if response.status_code in FALLBACK_STATUSES:
         response.close()

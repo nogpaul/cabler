@@ -35,7 +35,8 @@ TOP_LEVEL_KEYS = {
     "download",
     "load",
 }
-DOWNLOAD_KEYS = {"url", "allowed_hosts", "max_bytes", "format"}
+DOWNLOAD_KEYS = {"url", "allowed_hosts", "max_bytes", "format", "probe"}
+PROBES = {"head", "none"}
 LOAD_KEYS = {"kind", "themes"}
 LOAD_KINDS = {"osm_pbf"}
 
@@ -59,6 +60,7 @@ class SourceSpec:
     file_format: str
     load_kind: str | None = None
     load_themes: tuple[str, ...] = ()
+    probe: str = "head"
 
 
 def _text(table: Mapping[str, Any], key: str, origin: str) -> str:
@@ -143,6 +145,11 @@ def parse(data: Mapping[str, Any], origin: str) -> SourceSpec:
         msg = f"{origin}: download.format must match {FILE_FORMAT.pattern}, got {file_format!r}"
         raise SourceConfigError(msg)
 
+    probe = download.get("probe", "head")
+    if probe not in PROBES:
+        msg = f"{origin}: download.probe must be one of {sorted(PROBES)}, got {probe!r}"
+        raise SourceConfigError(msg)
+
     homepage = data.get("homepage")
     if homepage is not None:
         homepage = _https_url(_text(data, "homepage", origin), "homepage", origin)
@@ -163,6 +170,7 @@ def parse(data: Mapping[str, Any], origin: str) -> SourceSpec:
         file_format=file_format,
         load_kind=load_kind,
         load_themes=load_themes,
+        probe=probe,
     )
 
 

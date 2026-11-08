@@ -83,10 +83,12 @@ def raw_dir(env: str) -> Path:
 
 
 def filename_for(spec: SourceSpec, final_url: str) -> str:
-    """A safe file name taken from the final URL, or derived from the source id."""
+    """A safe file name with an extension from the final URL, or one derived from the source id."""
     path = urlsplit(final_url).path
     name = "" if path.endswith("/") else Path(path).name
-    return name if SAFE_NAME.match(name) else f"{spec.source_id}.{spec.file_format}"
+    if SAFE_NAME.match(name) and "." in name:
+        return name
+    return f"{spec.source_id}.{spec.file_format}"
 
 
 def ensure_space(directory: Path, needed: int) -> None:
@@ -106,14 +108,18 @@ def download(client: httpx.Client, spec: SourceSpec, directory: Path) -> Downloa
         target = directory / filename_for(spec, state.url)
         digest = hashlib.sha256()
         size = 0
-        with target.open("wb") as handle:
-            for chunk in response.iter_raw(CHUNK_SIZE):
-                size += len(chunk)
-                if size > spec.max_bytes:
-                    msg = f"{spec.url}: more than {spec.max_bytes} bytes received; stopped"
-                    raise TooLargeError(msg)
-                digest.update(chunk)
-                handle.write(chunk)
+        try:
+            with target.open("wb") as handle:
+                for chunk in response.iter_raw(CHUNK_SIZE):
+                    size += len(chunk)
+                    if size > spec.max_bytes:
+                        msg = f"{spec.url}: more than {spec.max_bytes} bytes received; stopped"
+                        raise TooLargeError(msg)
+                    digest.update(chunk)
+                    handle.write(chunk)
+        except httpx.TransportError as exc:
+            msg = f"{spec.url}: the connection broke after {size} bytes ({type(exc).__name__})"
+            raise DownloadError(msg) from exc
     finally:
         response.close()
     if state.content_length is not None and size != state.content_length:

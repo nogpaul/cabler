@@ -67,6 +67,7 @@ def test_an_incomplete_download_is_rejected(tmp_path: Path, make_spec: SpecFacto
         ("https://data.example.org/a/hamburg-261107.osm.pbf", "hamburg-261107.osm.pbf"),
         ("https://data.example.org/a/dir/", "demo.bin"),
         ("https://data.example.org/a/we ird.bin", "demo.bin"),
+        ("https://data.example.org/ogc/wfs/layer", "demo.bin"),
     ],
 )
 def test_file_names_are_safe(url: str, expected: str, make_spec: SpecFactory) -> None:
