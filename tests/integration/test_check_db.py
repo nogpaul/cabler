@@ -24,8 +24,10 @@ def last_run_id(conn: psycopg.Connection[Any]) -> int:
     return int(row[0]) if row else 0
 
 
-def test_check_compares_with_the_latest_fetched_version_and_records_runs() -> None:
-    spec = sources.load_all()["osm_hamburg"]
+def test_check_compares_with_the_latest_fetched_version_and_records_runs(
+    itest_spec: sources.SourceSpec,
+) -> None:
+    spec = itest_spec
     publisher = {"etag": '"v1"'}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -61,8 +63,8 @@ def test_check_compares_with_the_latest_fetched_version_and_records_runs() -> No
         ]
 
 
-def test_a_failed_check_is_recorded_with_its_error() -> None:
-    spec = sources.load_all()["osm_hamburg"]
+def test_a_failed_check_is_recorded_with_its_error(itest_spec: sources.SourceSpec) -> None:
+    spec = itest_spec
     client = remote.make_client(httpx.MockTransport(lambda request: httpx.Response(503)))
     with db.connect("app") as conn, conn.transaction(force_rollback=True):
         sources.register(conn, spec)

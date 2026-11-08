@@ -19,8 +19,10 @@ if "CABLER_ENV" not in os.environ:
     pytest.skip("CABLER_ENV not set", allow_module_level=True)
 
 
-def test_fetch_then_check_then_refetch_follows_the_publisher(tmp_path: Path) -> None:
-    spec = sources.load_all()["osm_hamburg"]
+def test_fetch_then_check_then_refetch_follows_the_publisher(
+    tmp_path: Path, itest_spec: sources.SourceSpec
+) -> None:
+    spec = itest_spec
     publisher: dict[str, Any] = {"etag": '"v1"', "body": b"first release" * 50}
 
     def handler(request: httpx.Request) -> httpx.Response:
