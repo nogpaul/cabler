@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -80,3 +81,33 @@ def test_every_repository_source_file_is_valid() -> None:
         assert spec.licence_id
         assert spec.attribution
         assert spec.url.startswith("https://")
+
+
+class FakeResult:
+    def fetchone(self) -> tuple[bool]:
+        return (True,)
+
+
+class FakeConnection:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, Any]] = []
+
+    def execute(self, query: str, params: Any = None) -> FakeResult:
+        self.calls.append((query, params))
+        return FakeResult()
+
+
+def test_register_writes_the_licence_fields_and_reports_creation(tmp_path: Path) -> None:
+    spec = sources.load_source(write(tmp_path, VALID))
+    conn = FakeConnection()
+    assert sources.register(conn, spec) is True  # type: ignore[arg-type]
+    (query, params) = conn.calls[0]
+    assert "ON CONFLICT (source_id) DO UPDATE" in query
+    assert params[:6] == (
+        "demo",
+        "Demo",
+        "Someone",
+        "dl-de/zero-2-0",
+        "https://www.govdata.de/dl-de/zero-2-0",
+        "Demo credit",
+    )

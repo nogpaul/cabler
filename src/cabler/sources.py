@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+import psycopg
+
 from cabler import db
 
 SOURCES_DIR = db.REPO_ROOT / "config" / "sources"
@@ -149,3 +151,35 @@ def load_source(path: Path) -> SourceSpec:
 def load_all(directory: Path = SOURCES_DIR) -> dict[str, SourceSpec]:
     """Read every ``*.toml`` file in the directory, keyed by source_id."""
     return {spec.source_id: spec for spec in map(load_source, sorted(directory.glob("*.toml")))}
+
+
+UPSERT = """
+INSERT INTO meta.source
+    (source_id, title, publisher, licence_id, licence_url, attribution, homepage)
+VALUES (%s, %s, %s, %s, %s, %s, %s)
+ON CONFLICT (source_id) DO UPDATE SET
+    title = EXCLUDED.title,
+    publisher = EXCLUDED.publisher,
+    licence_id = EXCLUDED.licence_id,
+    licence_url = EXCLUDED.licence_url,
+    attribution = EXCLUDED.attribution,
+    homepage = EXCLUDED.homepage
+RETURNING (xmax = 0)
+"""
+
+
+def register(conn: psycopg.Connection[Any], spec: SourceSpec) -> bool:
+    """Write a source and its licence to ``meta.source``. Returns True if it was newly created."""
+    row = conn.execute(
+        UPSERT,
+        (
+            spec.source_id,
+            spec.title,
+            spec.publisher,
+            spec.licence_id,
+            spec.licence_url,
+            spec.attribution,
+            spec.homepage,
+        ),
+    ).fetchone()
+    return bool(row and row[0])
