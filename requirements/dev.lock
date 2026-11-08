@@ -15,6 +15,7 @@ librt==0.16.0
 mypy==2.4.1
 mypy_extensions==1.2.0
 nodeenv==1.12.0
+numpy==2.5.4
 packaging==26.3
 pathspec==1.1.1
 platformdirs==4.14.5
@@ -24,6 +25,7 @@ pre_commit==4.7.0
 psycopg==3.3.8
 psycopg-binary==3.3.8
 Pygments==2.21.0
+pyogrio==0.13.0
 pytest==9.2.0
 pytest-cov==7.1.0
 python-discovery==1.9.5
