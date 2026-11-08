@@ -34,11 +34,14 @@ TOP_LEVEL_KEYS = {
     "homepage",
     "download",
     "load",
+    "tiles",
 }
 DOWNLOAD_KEYS = {"url", "allowed_hosts", "max_bytes", "format", "probe"}
 PROBES = {"head", "none"}
 LOAD_KEYS = {"kind", "themes"}
 LOAD_KINDS = {"osm_pbf"}
+TILES_KEYS = {"kind"}
+TILES_KINDS = {"opengeodata_index"}
 
 
 class SourceConfigError(Exception):
@@ -61,6 +64,7 @@ class SourceSpec:
     load_kind: str | None = None
     load_themes: tuple[str, ...] = ()
     probe: str = "head"
+    tiles_kind: str | None = None
 
 
 def _text(table: Mapping[str, Any], key: str, origin: str) -> str:
@@ -109,6 +113,21 @@ def _parse_load(table: object, origin: str) -> tuple[str | None, tuple[str, ...]
     return kind, tuple(themes)
 
 
+def _parse_tiles(table: object, origin: str) -> str | None:
+    """Validate the optional [tiles] table: the source is an index of many tile files."""
+    if table is None:
+        return None
+    if not isinstance(table, dict):
+        msg = f"{origin}: [tiles] must be a table"
+        raise SourceConfigError(msg)
+    _unknown_keys(table, TILES_KEYS, origin)
+    kind = _text(table, "kind", origin)
+    if kind not in TILES_KINDS:
+        msg = f"{origin}: tiles.kind must be one of {sorted(TILES_KINDS)}, got {kind!r}"
+        raise SourceConfigError(msg)
+    return kind
+
+
 def parse(data: Mapping[str, Any], origin: str) -> SourceSpec:
     """Validate a parsed TOML document and turn it into a :class:`SourceSpec`."""
     _unknown_keys(data, TOP_LEVEL_KEYS, origin)
@@ -155,6 +174,7 @@ def parse(data: Mapping[str, Any], origin: str) -> SourceSpec:
         homepage = _https_url(_text(data, "homepage", origin), "homepage", origin)
 
     load_kind, load_themes = _parse_load(data.get("load"), origin)
+    tiles_kind = _parse_tiles(data.get("tiles"), origin)
 
     return SourceSpec(
         source_id=source_id,
@@ -171,6 +191,7 @@ def parse(data: Mapping[str, Any], origin: str) -> SourceSpec:
         load_kind=load_kind,
         load_themes=load_themes,
         probe=probe,
+        tiles_kind=tiles_kind,
     )
 
 

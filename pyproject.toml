@@ -12,6 +12,7 @@ dependencies = [
     "httpx>=0.27",
     "psycopg[binary]>=3.2",
     "pyogrio>=0.9",
+    "defusedxml>=0.7",
 ]
 
 [project.optional-dependencies]
@@ -67,5 +68,5 @@ check = ["lint", "format-check", "typecheck", "test"]
 test-int = "pytest -m integration"
 
 [[tool.mypy.overrides]]
-module = ["pyogrio", "pyogrio.*"]
+module = ["pyogrio", "pyogrio.*", "defusedxml", "defusedxml.*"]
 ignore_missing_imports = true
