@@ -34,7 +34,7 @@ LIMIT 1
 LOADED_SQL = """
 SELECT version_id
 FROM meta.source_version
-WHERE source_id = %s AND status IN ('loaded', 'applied')
+WHERE source_id = %s AND status IN ('loaded', 'diffed', 'applied')
 ORDER BY created_at DESC, version_id DESC
 LIMIT 1
 """

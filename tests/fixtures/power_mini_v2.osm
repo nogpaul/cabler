@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="cabler-tests">
+  <!-- The next release of power_mini.osm: n1 re-tagged, n2 deleted, n20 added, w10 reshaped. -->
+  <node id="1" version="4" timestamp="2026-02-01T10:00:00Z" lat="53.5500" lon="10.0000">
+    <tag k="power" v="substation"/>
+    <tag k="voltage" v="220000"/>
+    <tag k="name" v="Umspannwerk Test"/>
+    <tag k="operator" v="Testnetz"/>
+  </node>
+  <node id="3" version="1" timestamp="2026-01-03T10:00:00Z" lat="53.5700" lon="10.0200">
+    <tag k="amenity" v="cafe"/>
+  </node>
+  <node id="4" version="1" timestamp="2026-01-04T10:00:00Z" lat="53.5800" lon="10.0300"/>
+  <node id="5" version="2" timestamp="2026-02-02T10:00:00Z" lat="53.5950" lon="10.0450"/>
+  <node id="6" version="1" timestamp="2026-01-04T10:00:00Z" lat="53.6000" lon="10.0500"/>
+  <node id="7" version="1" timestamp="2026-01-04T10:00:00Z" lat="53.6000" lon="10.0600"/>
+  <node id="8" version="1" timestamp="2026-01-04T10:00:00Z" lat="53.6100" lon="10.0600"/>
+  <node id="20" version="1" timestamp="2026-02-03T10:00:00Z" lat="53.6200" lon="10.0700">
+    <tag k="power" v="substation"/>
+    <tag k="voltage" v="110000"/>
+    <tag k="name" v="Neues Umspannwerk"/>
+  </node>
+  <way id="10" version="2" timestamp="2026-01-05T10:00:00Z">
+    <nd ref="4"/>
+    <nd ref="5"/>
+    <tag k="power" v="line"/>
+    <tag k="voltage" v="110000"/>
+    <tag k="cables" v="3"/>
+    <tag k="circuits" v="1"/>
+  </way>
+  <way id="11" version="1" timestamp="2026-01-06T10:00:00Z">
+    <nd ref="4"/>
+    <nd ref="5"/>
+    <tag k="highway" v="residential"/>
+  </way>
+  <way id="12" version="1" timestamp="2026-01-07T10:00:00Z">
+    <nd ref="6"/>
+    <nd ref="7"/>
+    <nd ref="8"/>
+    <nd ref="6"/>
+    <tag k="power" v="substation"/>
+    <tag k="voltage" v="380000"/>
+    <tag k="name" v="Umspannwerk Flaeche"/>
+  </way>
+</osm>
