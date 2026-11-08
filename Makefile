@@ -6,7 +6,7 @@ PY := .venv/bin/python
 ENV ?= dev
 
 .DEFAULT_GOAL := help
-.PHONY: help setup env db-up db-down db-psql db-reset migrate migrate-status sources register updates fetch check test-int lock
+.PHONY: help setup env db-up db-down db-psql db-reset migrate migrate-status sources register updates fetch load check test-int lock
 
 help: ## show this help
 > @grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
@@ -49,6 +49,9 @@ updates: ## ask the publishers whether any source changed, without downloading (
 
 fetch: ## download sources into snapshots: make fetch SOURCES=osm_hamburg [YES=1] ($(ENV))
 > $(PY) -m cabler.pipeline fetch $(ENV) $(SOURCES) $(if $(YES),--yes,)
+
+load: ## load fetched snapshots into the raw schema: make load SOURCES=osm_hamburg ($(ENV))
+> $(PY) -m cabler.pipeline load $(ENV) $(SOURCES)
 
 check: ## lint, format check, type check, unit tests
 > .venv/bin/poe check

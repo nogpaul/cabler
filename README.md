@@ -12,6 +12,7 @@ PostgreSQL, PostGIS and pgRouting.
     make register   # write the data sources and their licences to the database
     make updates    # ask publishers whether data changed (no download)
     make fetch SOURCES=osm_hamburg   # show the download plan; add YES=1 to download
+    make load SOURCES=osm_hamburg    # load the fetched snapshot into the raw schema
     make check      # lint, format, types, unit tests
     make test-int   # database gate tests
 

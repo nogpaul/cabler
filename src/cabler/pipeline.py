@@ -4,6 +4,7 @@ Usage: python -m cabler.pipeline list
        python -m cabler.pipeline register {dev,staging,production}
        python -m cabler.pipeline check {dev,staging,production} [SOURCE ...] [--json]
        python -m cabler.pipeline fetch {dev,staging,production} SOURCE ... [--yes] [--force]
+       python -m cabler.pipeline load {dev,staging,production} SOURCE ...
 """
 
 from __future__ import annotations
@@ -15,8 +16,9 @@ from typing import Any
 
 import psycopg
 
-from cabler import checks, db, fetch, remote, sources
+from cabler import checks, db, fetch, load, remote, sources
 from cabler.envgen import NAMES
+from cabler.load import LoadError
 from cabler.remote import RemoteError
 from cabler.sources import SourceSpec
 
@@ -117,6 +119,23 @@ def _run_fetch(env: str, selected: list[SourceSpec], *, yes: bool, force: bool) 
     return 1 if failures else 0
 
 
+def _run_load(env: str, selected: list[SourceSpec]) -> int:
+    failures = 0
+    with db.connect("app", environ={"CABLER_ENV": env}) as conn:
+        conn.autocommit = True
+        _require_registered(conn, selected, env)
+        for spec in selected:
+            try:
+                result = load.load_source(conn, spec, fetch.raw_dir(env))
+            except (RemoteError, LoadError) as exc:
+                failures += 1
+                print(f"ERROR {spec.source_id}: {exc}", file=sys.stderr)
+                continue
+            counts = ", ".join(f"{k} {n:,}" for k, n in result.counts.items()) or "nothing new"
+            print(f"{result.status:<10} {spec.source_id:<18} {counts}")
+    return 1 if failures else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -136,6 +155,9 @@ def main(argv: list[str] | None = None) -> int:
         "--yes", action="store_true", help="really download (default: plan only)"
     )
     fetch_cmd.add_argument("--force", action="store_true", help="download even if unchanged")
+    load_cmd = commands.add_parser("load", help="load fetched snapshots into the raw schema")
+    load_cmd.add_argument("name", choices=NAMES)
+    load_cmd.add_argument("sources", nargs="+", help="source ids to load")
     args = parser.parse_args(argv)
 
     specs = sources.load_all()
@@ -150,6 +172,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.action == "fetch":
         selected = _select(specs, args.sources)
         return _run_fetch(args.name, selected, yes=args.yes, force=args.force)
+
+    if args.action == "load":
+        return _run_load(args.name, _select(specs, args.sources))
 
     with db.connect("app", environ={"CABLER_ENV": args.name}) as conn:
         for spec in specs.values():
