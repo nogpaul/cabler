@@ -6,7 +6,7 @@ PY := .venv/bin/python
 ENV ?= dev
 
 .DEFAULT_GOAL := help
-.PHONY: help setup env db-up db-down db-psql db-reset migrate migrate-status sources register updates fetch load diff check test-int lock
+.PHONY: help setup env db-up db-down db-psql db-reset migrate migrate-status sources register updates fetch load diff apply check test-int lock
 
 help: ## show this help
 > @grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
@@ -55,6 +55,9 @@ load: ## load fetched snapshots into the raw schema: make load SOURCES=osm_hambu
 
 diff: ## compare loaded snapshots with their predecessors: make diff SOURCES=osm_hamburg ($(ENV))
 > $(PY) -m cabler.pipeline diff $(ENV) $(SOURCES)
+
+apply: ## apply diffed snapshots to the staging state: make apply SOURCES=osm_hamburg ($(ENV))
+> $(PY) -m cabler.pipeline apply $(ENV) $(SOURCES)
 
 check: ## lint, format check, type check, unit tests
 > .venv/bin/poe check

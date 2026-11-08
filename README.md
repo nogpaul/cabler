@@ -14,6 +14,7 @@ PostgreSQL, PostGIS and pgRouting.
     make fetch SOURCES=osm_hamburg   # show the download plan; add YES=1 to download
     make load SOURCES=osm_hamburg    # load the fetched snapshot into the raw schema
     make diff SOURCES=osm_hamburg    # list what was added, changed or removed since the last snapshot
+    make apply SOURCES=osm_hamburg   # bring the staging state (with history) up to date
     make check      # lint, format, types, unit tests
     make test-int   # database gate tests
 

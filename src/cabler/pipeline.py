@@ -6,6 +6,7 @@ Usage: python -m cabler.pipeline list
        python -m cabler.pipeline fetch {dev,staging,production} SOURCE ... [--yes] [--force]
        python -m cabler.pipeline load {dev,staging,production} SOURCE ...
        python -m cabler.pipeline diff {dev,staging,production} SOURCE ...
+       python -m cabler.pipeline apply {dev,staging,production} SOURCE ...
 """
 
 from __future__ import annotations
@@ -17,7 +18,8 @@ from typing import Any
 
 import psycopg
 
-from cabler import checks, db, diff, fetch, load, remote, sources
+from cabler import apply, checks, db, diff, fetch, load, remote, sources
+from cabler.apply import ApplyError
 from cabler.diff import DiffError
 from cabler.envgen import NAMES
 from cabler.load import LoadError
@@ -165,6 +167,35 @@ def _run_diff(env: str, selected: list[SourceSpec]) -> int:
     return 1 if failures else 0
 
 
+def _run_apply(env: str, selected: list[SourceSpec]) -> int:
+    failures = 0
+    with db.connect("app", environ={"CABLER_ENV": env}) as conn:
+        conn.autocommit = True
+        _require_registered(conn, selected, env)
+        for spec in selected:
+            try:
+                result = apply.apply_source(conn, spec)
+            except ApplyError as exc:
+                failures += 1
+                print(f"ERROR {spec.source_id}: {exc}", file=sys.stderr)
+                continue
+            if not result.steps:
+                print(f"{result.status:<10} {spec.source_id:<18} nothing new to apply")
+            for step in result.steps:
+                print(
+                    f"{result.status:<10} {spec.source_id:<18} "
+                    f"+{step.opened:,} opened  -{step.closed:,} closed  "
+                    f"({step.current:,} current)"
+                )
+            if result.steps:
+                last = result.steps[-1]
+                kinds = ", ".join(f"{k} {n:,}" for k, n in last.kinds.items())
+                flags = ", ".join(f"{k} {n:,}" for k, n in last.flags.items()) or "none"
+                print(f"{'':<29}kinds: {kinds}")
+                print(f"{'':<29}findings: {flags}")
+    return 1 if failures else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -190,6 +221,9 @@ def main(argv: list[str] | None = None) -> int:
     diff_cmd = commands.add_parser("diff", help="compare loaded snapshots with their predecessors")
     diff_cmd.add_argument("name", choices=NAMES)
     diff_cmd.add_argument("sources", nargs="+", help="source ids to diff")
+    apply_cmd = commands.add_parser("apply", help="apply diffed snapshots to the staging state")
+    apply_cmd.add_argument("name", choices=NAMES)
+    apply_cmd.add_argument("sources", nargs="+", help="source ids to apply")
     args = parser.parse_args(argv)
 
     specs = sources.load_all()
@@ -210,6 +244,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.action == "diff":
         return _run_diff(args.name, _select(specs, args.sources))
+
+    if args.action == "apply":
+        return _run_apply(args.name, _select(specs, args.sources))
 
     with db.connect("app", environ={"CABLER_ENV": args.name}) as conn:
         for spec in specs.values():
