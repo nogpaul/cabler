@@ -1,0 +1,13 @@
+source_id = "osm_nrw"
+title = "OpenStreetMap extract, Nordrhein-Westfalen"
+publisher = "OpenStreetMap contributors, extract by Geofabrik"
+licence_id = "ODbL-1.0"
+licence_url = "https://opendatacommons.org/licenses/odbl/1-0/"
+attribution = "© OpenStreetMap contributors"
+homepage = "https://download.geofabrik.de/europe/germany/nordrhein-westfalen.html"
+
+[download]
+url = "https://download.geofabrik.de/europe/germany/nordrhein-westfalen-latest.osm.pbf"
+allowed_hosts = ["download.geofabrik.de"]
+max_bytes = 1_500_000_000
+format = "osm.pbf"

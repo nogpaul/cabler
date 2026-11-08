@@ -1,0 +1,13 @@
+source_id = "nrw_dgm1_index"
+title = "NRW digital terrain model 1 m, tile index"
+publisher = "Geobasis NRW"
+licence_id = "dl-de/zero-2-0"
+licence_url = "https://www.govdata.de/dl-de/zero-2-0"
+attribution = "Geobasis NRW, dl-de/zero-2-0"
+homepage = "https://www.opengeodata.nrw.de/produkte/geobasis/hm/dgm1_tiff/dgm1_tiff/"
+
+[download]
+url = "https://www.opengeodata.nrw.de/produkte/geobasis/hm/dgm1_tiff/dgm1_tiff/"
+allowed_hosts = ["www.opengeodata.nrw.de"]
+max_bytes = 20_000_000
+format = "xml"
