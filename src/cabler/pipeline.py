@@ -5,6 +5,7 @@ Usage: python -m cabler.pipeline list
        python -m cabler.pipeline check {dev,staging,production} [SOURCE ...] [--json]
        python -m cabler.pipeline fetch {dev,staging,production} SOURCE ... [--yes] [--force]
        python -m cabler.pipeline load {dev,staging,production} SOURCE ...
+       python -m cabler.pipeline diff {dev,staging,production} SOURCE ...
 """
 
 from __future__ import annotations
@@ -16,7 +17,8 @@ from typing import Any
 
 import psycopg
 
-from cabler import checks, db, fetch, load, remote, sources
+from cabler import checks, db, diff, fetch, load, remote, sources
+from cabler.diff import DiffError
 from cabler.envgen import NAMES
 from cabler.load import LoadError
 from cabler.remote import RemoteError
@@ -136,6 +138,33 @@ def _run_load(env: str, selected: list[SourceSpec]) -> int:
     return 1 if failures else 0
 
 
+def _run_diff(env: str, selected: list[SourceSpec]) -> int:
+    failures = 0
+    with db.connect("app", environ={"CABLER_ENV": env}) as conn:
+        conn.autocommit = True
+        _require_registered(conn, selected, env)
+        for spec in selected:
+            try:
+                result = diff.diff_source(conn, spec)
+            except DiffError as exc:
+                failures += 1
+                print(f"ERROR {spec.source_id}: {exc}", file=sys.stderr)
+                continue
+            if not result.steps:
+                print(f"{result.status:<10} {spec.source_id:<18} nothing new to compare")
+            for step in result.steps:
+                if step.baseline:
+                    summary = f"first snapshot: {step.added:,} objects"
+                else:
+                    summary = (
+                        f"+{step.added:,} added  ~{step.changed:,} changed  "
+                        f"-{step.removed:,} removed  "
+                        f"(of {step.total_before:,} before, {step.total_after:,} now)"
+                    )
+                print(f"{result.status:<10} {spec.source_id:<18} {summary}")
+    return 1 if failures else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -158,6 +187,9 @@ def main(argv: list[str] | None = None) -> int:
     load_cmd = commands.add_parser("load", help="load fetched snapshots into the raw schema")
     load_cmd.add_argument("name", choices=NAMES)
     load_cmd.add_argument("sources", nargs="+", help="source ids to load")
+    diff_cmd = commands.add_parser("diff", help="compare loaded snapshots with their predecessors")
+    diff_cmd.add_argument("name", choices=NAMES)
+    diff_cmd.add_argument("sources", nargs="+", help="source ids to diff")
     args = parser.parse_args(argv)
 
     specs = sources.load_all()
@@ -175,6 +207,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.action == "load":
         return _run_load(args.name, _select(specs, args.sources))
+
+    if args.action == "diff":
+        return _run_diff(args.name, _select(specs, args.sources))
 
     with db.connect("app", environ={"CABLER_ENV": args.name}) as conn:
         for spec in specs.values():
