@@ -11,3 +11,7 @@ url = "https://download.geofabrik.de/europe/germany/hamburg-latest.osm.pbf"
 allowed_hosts = ["download.geofabrik.de"]
 max_bytes = 200_000_000
 format = "osm.pbf"
+
+[load]
+kind = "osm_pbf"
+themes = ["power"]

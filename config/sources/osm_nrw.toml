@@ -11,3 +11,7 @@ url = "https://download.geofabrik.de/europe/germany/nordrhein-westfalen-latest.o
 allowed_hosts = ["download.geofabrik.de"]
 max_bytes = 1_500_000_000
 format = "osm.pbf"
+
+[load]
+kind = "osm_pbf"
+themes = ["power"]

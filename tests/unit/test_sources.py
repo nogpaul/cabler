@@ -111,3 +111,32 @@ def test_register_writes_the_licence_fields_and_reports_creation(tmp_path: Path)
         "https://www.govdata.de/dl-de/zero-2-0",
         "Demo credit",
     )
+
+
+def test_a_load_section_is_parsed(tmp_path: Path) -> None:
+    text = VALID + '\n[load]\nkind = "osm_pbf"\nthemes = ["power", "transport"]\n'
+    spec = sources.load_source(write(tmp_path, text))
+    assert spec.load_kind == "osm_pbf"
+    assert spec.load_themes == ("power", "transport")
+
+
+@pytest.mark.parametrize(
+    ("load_section", "message"),
+    [
+        ('kind = "shapefile"\nthemes = ["power"]', "load.kind must be one of"),
+        ('kind = "osm_pbf"\nthemes = ["roads"]', "load.themes must be a non-empty list"),
+        ('kind = "osm_pbf"\nthemes = []', "load.themes must be a non-empty list"),
+        ('kind = "osm_pbf"\nthemes = ["power"]\ntypo = 1', "unknown key"),
+    ],
+)
+def test_invalid_load_sections_are_rejected(
+    tmp_path: Path, load_section: str, message: str
+) -> None:
+    with pytest.raises(SourceConfigError, match=message):
+        sources.load_source(write(tmp_path, VALID + "\n[load]\n" + load_section + "\n"))
+
+
+def test_a_load_section_that_is_not_a_table_is_rejected(tmp_path: Path) -> None:
+    text = 'load = "yes"\n' + VALID
+    with pytest.raises(SourceConfigError, match=r"\[load\] must be a table"):
+        sources.load_source(write(tmp_path, text))

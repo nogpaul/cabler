@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 
 import psycopg
 
-from cabler import db
+from cabler import db, osm
 
 SOURCES_DIR = db.REPO_ROOT / "config" / "sources"
 SOURCE_ID = re.compile(r"^[a-z0-9_]+$")
@@ -33,8 +33,11 @@ TOP_LEVEL_KEYS = {
     "attribution",
     "homepage",
     "download",
+    "load",
 }
 DOWNLOAD_KEYS = {"url", "allowed_hosts", "max_bytes", "format"}
+LOAD_KEYS = {"kind", "themes"}
+LOAD_KINDS = {"osm_pbf"}
 
 
 class SourceConfigError(Exception):
@@ -54,6 +57,8 @@ class SourceSpec:
     allowed_hosts: tuple[str, ...]
     max_bytes: int
     file_format: str
+    load_kind: str | None = None
+    load_themes: tuple[str, ...] = ()
 
 
 def _text(table: Mapping[str, Any], key: str, origin: str) -> str:
@@ -77,6 +82,29 @@ def _unknown_keys(table: Mapping[str, Any], allowed: set[str], origin: str) -> N
     if unknown:
         msg = f"{origin}: unknown key(s) {unknown}; allowed: {sorted(allowed)}"
         raise SourceConfigError(msg)
+
+
+def _parse_load(table: object, origin: str) -> tuple[str | None, tuple[str, ...]]:
+    """Validate the optional [load] table: which loader to use and which themes to keep."""
+    if table is None:
+        return None, ()
+    if not isinstance(table, dict):
+        msg = f"{origin}: [load] must be a table"
+        raise SourceConfigError(msg)
+    _unknown_keys(table, LOAD_KEYS, origin)
+    kind = _text(table, "kind", origin)
+    if kind not in LOAD_KINDS:
+        msg = f"{origin}: load.kind must be one of {sorted(LOAD_KINDS)}, got {kind!r}"
+        raise SourceConfigError(msg)
+    themes = table.get("themes")
+    if (
+        not isinstance(themes, list)
+        or not themes
+        or not all(isinstance(t, str) and t in osm.THEMES for t in themes)
+    ):
+        msg = f"{origin}: load.themes must be a non-empty list from {sorted(osm.THEMES)}"
+        raise SourceConfigError(msg)
+    return kind, tuple(themes)
 
 
 def parse(data: Mapping[str, Any], origin: str) -> SourceSpec:
@@ -119,6 +147,8 @@ def parse(data: Mapping[str, Any], origin: str) -> SourceSpec:
     if homepage is not None:
         homepage = _https_url(_text(data, "homepage", origin), "homepage", origin)
 
+    load_kind, load_themes = _parse_load(data.get("load"), origin)
+
     return SourceSpec(
         source_id=source_id,
         title=_text(data, "title", origin),
@@ -131,6 +161,8 @@ def parse(data: Mapping[str, Any], origin: str) -> SourceSpec:
         allowed_hosts=tuple(hosts),
         max_bytes=max_bytes,
         file_format=file_format,
+        load_kind=load_kind,
+        load_themes=load_themes,
     )
 
 
