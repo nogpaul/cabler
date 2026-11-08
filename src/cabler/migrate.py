@@ -11,6 +11,10 @@ import hashlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
+
+import psycopg
+from psycopg import sql
 
 from cabler import db
 
@@ -47,3 +51,70 @@ def discover(directory: Path = MIGRATIONS_DIR) -> list[Migration]:
         msg = f"versions must run 1..N without gaps or duplicates, found {versions}"
         raise MigrationError(msg)
     return migrations
+
+
+DEFAULT_TABLE = "meta.schema_migration"
+TABLE_NAME = re.compile(r"^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$")
+
+
+def _table(name: str) -> sql.Identifier:
+    if not TABLE_NAME.match(name):
+        msg = f"invalid table name: {name!r}"
+        raise MigrationError(msg)
+    schema, table = name.split(".")
+    return sql.Identifier(schema, table)
+
+
+def ensure_table(conn: psycopg.Connection[Any], table: str = DEFAULT_TABLE) -> None:
+    """Create the bookkeeping table if it does not exist yet."""
+    conn.execute(
+        sql.SQL(
+            "CREATE TABLE IF NOT EXISTS {} ("
+            "version int PRIMARY KEY, name text NOT NULL, checksum text NOT NULL, "
+            "applied_at timestamptz NOT NULL DEFAULT now())"
+        ).format(_table(table))
+    )
+
+
+def applied(conn: psycopg.Connection[Any], table: str = DEFAULT_TABLE) -> dict[int, str]:
+    """Return ``{version: checksum}`` for every migration recorded as applied."""
+    query = sql.SQL("SELECT version, checksum FROM {} ORDER BY version").format(_table(table))
+    return {int(v): str(c) for v, c in conn.execute(query).fetchall()}
+
+
+def applied_or_empty(conn: psycopg.Connection[Any], table: str = DEFAULT_TABLE) -> dict[int, str]:
+    """Like :func:`applied`, but a missing bookkeeping table means nothing is applied yet."""
+    row = conn.execute("SELECT to_regclass(%s)", (table,)).fetchone()
+    if row is None or row[0] is None:
+        return {}
+    return applied(conn, table)
+
+
+def pending(migrations: list[Migration], done: dict[int, str]) -> list[Migration]:
+    """Return the migrations still to run; refuse if history and files disagree."""
+    by_version = {m.version: m for m in migrations}
+    for version, checksum in done.items():
+        known = by_version.get(version)
+        if known is None:
+            msg = f"database has migration {version} but no file provides it"
+            raise MigrationError(msg)
+        if known.checksum != checksum:
+            msg = f"migration {version} ({known.name}) was changed after it was applied"
+            raise MigrationError(msg)
+    return [m for m in migrations if m.version not in done]
+
+
+def apply_pending(
+    conn: psycopg.Connection[Any], migrations: list[Migration], table: str = DEFAULT_TABLE
+) -> list[int]:
+    """Apply every pending migration, one transaction each. Returns the versions applied."""
+    ensure_table(conn, table)
+    todo = pending(migrations, applied(conn, table))
+    record = sql.SQL("INSERT INTO {} (version, name, checksum) VALUES (%s, %s, %s)").format(
+        _table(table)
+    )
+    for migration in todo:
+        with conn.transaction():
+            conn.execute(migration.sql)
+            conn.execute(record, (migration.version, migration.name, migration.checksum))
+    return [m.version for m in todo]
