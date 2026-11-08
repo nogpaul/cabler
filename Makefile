@@ -6,7 +6,7 @@ PY := .venv/bin/python
 ENV ?= dev
 
 .DEFAULT_GOAL := help
-.PHONY: help setup env db-up db-down db-psql db-reset migrate migrate-status sources register updates fetch load diff apply validate review check test-int lock
+.PHONY: help setup env db-up db-down db-psql db-reset migrate migrate-status sources register updates fetch load diff apply tiles validate review check test-int lock
 
 help: ## show this help
 > @grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
@@ -58,6 +58,9 @@ diff: ## compare loaded snapshots with their predecessors: make diff SOURCES=osm
 
 apply: ## apply diffed snapshots to the staging state: make apply SOURCES=osm_hamburg ($(ENV))
 > $(PY) -m cabler.pipeline apply $(ENV) $(SOURCES)
+
+tiles: ## fetch the tiles of an index source: make tiles SOURCES=nrw_dgm1 [YES=1] [LIMIT=5] ($(ENV))
+> $(PY) -m cabler.pipeline tiles $(ENV) $(SOURCES) $(if $(YES),--yes,) $(if $(LIMIT),--limit $(LIMIT),)
 
 validate: ## judge applied snapshots, collect voltage hints: make validate SOURCES=osm_hamburg ($(ENV))
 > $(PY) -m cabler.pipeline validate $(ENV) $(SOURCES)

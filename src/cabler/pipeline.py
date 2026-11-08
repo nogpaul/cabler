@@ -7,6 +7,8 @@ Usage: python -m cabler.pipeline list
        python -m cabler.pipeline load {dev,staging,production} SOURCE ...
        python -m cabler.pipeline diff {dev,staging,production} SOURCE ...
        python -m cabler.pipeline apply {dev,staging,production} SOURCE ...
+       python -m cabler.pipeline tiles {dev,staging,production} SOURCE
+           [--yes] [--limit N] [--workers N]
        python -m cabler.pipeline validate {dev,staging,production} SOURCE ...
        python -m cabler.pipeline review {dev,staging,production} SOURCE
            [--suggestion S] [--limit N]
@@ -21,13 +23,14 @@ from typing import Any
 
 import psycopg
 
-from cabler import apply, checks, db, diff, fetch, load, remote, sources, validate
+from cabler import apply, checks, db, diff, fetch, load, remote, sources, tiles, validate
 from cabler.apply import ApplyError
 from cabler.diff import DiffError
 from cabler.envgen import NAMES
 from cabler.load import LoadError
 from cabler.remote import RemoteError
 from cabler.sources import SourceSpec
+from cabler.tiles import TilesError
 from cabler.validate import ValidateError
 
 
@@ -252,6 +255,45 @@ def _run_review(env: str, spec: SourceSpec, suggestion: str | None, limit: int) 
     return 0
 
 
+def _run_tiles(env: str, spec: SourceSpec, *, yes: bool, limit: int | None, workers: int) -> int:
+    def progress(done: int, total: int, fetched: int) -> None:
+        if done % 500 == 0 or done == total:
+            print(f"  {done:,} of {total:,} tiles  ({_human(fetched)})", flush=True)
+
+    with db.connect("app", environ={"CABLER_ENV": env}) as conn:
+        conn.autocommit = True
+        _require_registered(conn, [spec], env)
+        try:
+            with remote.make_client() as client:
+                result = tiles.fetch_tiles(
+                    conn,
+                    client,
+                    spec,
+                    fetch.raw_dir(env),
+                    yes=yes,
+                    limit=limit,
+                    workers=workers,
+                    on_progress=progress,
+                )
+        except (RemoteError, TilesError) as exc:
+            print(f"ERROR {spec.source_id}: {exc}", file=sys.stderr)
+            return 1
+    print(
+        f"{spec.source_id}: {result.listed:,} tiles listed; {result.new:,} new, "
+        f"{result.changed:,} changed, {result.unchanged:,} unchanged, {result.removed:,} removed"
+    )
+    if not yes:
+        wanted = result.new + result.changed
+        print(f"Would download {wanted:,} tiles ({_human(result.planned_bytes)}).")
+        print("Nothing was downloaded. Add --yes to download for real.")
+        return 0
+    got = _human(result.bytes_fetched)
+    print(f"fetched {result.fetched:,} tiles ({got}); {result.failed:,} failed")
+    for failure in result.failures:
+        print(f"  FAILED {failure}", file=sys.stderr)
+    return 1 if result.failed else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -288,6 +330,12 @@ def main(argv: list[str] | None = None) -> int:
     review_cmd.add_argument("source", help="source id")
     review_cmd.add_argument("--suggestion", help="only this suggestion")
     review_cmd.add_argument("--limit", type=int, default=20, help="rows to show")
+    tiles_cmd = commands.add_parser("tiles", help="fetch the tiles listed by an index source")
+    tiles_cmd.add_argument("name", choices=NAMES)
+    tiles_cmd.add_argument("source", help="source id")
+    tiles_cmd.add_argument("--yes", action="store_true", help="really download")
+    tiles_cmd.add_argument("--limit", type=int, help="only the first N missing tiles")
+    tiles_cmd.add_argument("--workers", type=int, default=6, help="parallel downloads")
     args = parser.parse_args(argv)
 
     specs = sources.load_all()
@@ -311,6 +359,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.action == "apply":
         return _run_apply(args.name, _select(specs, args.sources))
+
+    if args.action == "tiles":
+        (tile_spec,) = _select(specs, [args.source])
+        return _run_tiles(
+            args.name, tile_spec, yes=args.yes, limit=args.limit, workers=args.workers
+        )
 
     if args.action == "validate":
         return _run_validate(args.name, _select(specs, args.sources))
