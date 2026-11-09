@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 
 import psycopg
 
-from cabler import db, osm
+from cabler import db, mastr, osm
 
 SOURCES_DIR = db.REPO_ROOT / "config" / "sources"
 SOURCE_ID = re.compile(r"^[a-z0-9_]+$")
@@ -39,7 +39,7 @@ TOP_LEVEL_KEYS = {
 DOWNLOAD_KEYS = {"url", "allowed_hosts", "max_bytes", "format", "probe"}
 PROBES = {"head", "none"}
 LOAD_KEYS = {"kind", "themes"}
-LOAD_KINDS = {"osm_pbf"}
+LOAD_KINDS = {"osm_pbf", "mastr_xml"}
 TILES_KEYS = {"kind"}
 TILES_KINDS = {"opengeodata_index"}
 
@@ -102,13 +102,14 @@ def _parse_load(table: object, origin: str) -> tuple[str | None, tuple[str, ...]
     if kind not in LOAD_KINDS:
         msg = f"{origin}: load.kind must be one of {sorted(LOAD_KINDS)}, got {kind!r}"
         raise SourceConfigError(msg)
+    known = sorted(osm.THEMES if kind == "osm_pbf" else mastr.THEMES)
     themes = table.get("themes")
     if (
         not isinstance(themes, list)
         or not themes
-        or not all(isinstance(t, str) and t in osm.THEMES for t in themes)
+        or not all(isinstance(t, str) and t in known for t in themes)
     ):
-        msg = f"{origin}: load.themes must be a non-empty list from {sorted(osm.THEMES)}"
+        msg = f"{origin}: load.themes must be a non-empty list from {known}"
         raise SourceConfigError(msg)
     return kind, tuple(themes)
 
