@@ -13,3 +13,7 @@ url = "https://download.marktstammdatenregister.de/Gesamtdatenexport_20261108_26
 allowed_hosts = ["download.marktstammdatenregister.de"]
 max_bytes = 4_500_000_000
 format = "zip"
+
+[load]
+kind = "mastr_xml"
+themes = ["wind"]

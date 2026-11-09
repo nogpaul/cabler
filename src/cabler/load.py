@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -19,7 +19,7 @@ import pyogrio
 import pyogrio.raw
 from psycopg import sql
 
-from cabler import osm, runs
+from cabler import features, mastr, osm, runs
 from cabler.sources import SourceSpec
 
 BATCH_SIZE = 2000
@@ -177,10 +177,40 @@ def snapshot_file(raw: Path, local_path: str) -> Path:
     return folder / str(manifest["file"])
 
 
+def _load_osm(
+    conn: psycopg.Connection[Any], version_id: int, path: Path, spec: SourceSpec
+) -> dict[str, int]:
+    return {
+        layer: store(conn, version_id, read_layer(path, layer, spec.load_themes))
+        for layer in osm.LAYERS
+    }
+
+
+def _load_mastr(
+    conn: psycopg.Connection[Any], version_id: int, path: Path, spec: SourceSpec
+) -> dict[str, int]:
+    features.store(conn, version_id, mastr.read_export(path, spec.load_themes))
+    return _feature_counts(conn, version_id)
+
+
+def _feature_counts(conn: psycopg.Connection[Any], version_id: int) -> dict[str, int]:
+    rows = conn.execute(
+        "SELECT layer, count(*) FROM raw.feature WHERE version_id = %s GROUP BY layer ORDER BY 1",
+        (version_id,),
+    ).fetchall()
+    return {str(layer): int(count) for layer, count in rows}
+
+
+LOADERS: dict[str, Callable[[psycopg.Connection[Any], int, Path, SourceSpec], dict[str, int]]] = {
+    "osm_pbf": _load_osm,
+    "mastr_xml": _load_mastr,
+}
+
+
 def load_source(conn: psycopg.Connection[Any], spec: SourceSpec, raw: Path) -> LoadResult:
     """Run the load stage for one source: load its newest fetched snapshot, if any."""
-    if spec.load_kind != "osm_pbf":
-        msg = f"{spec.source_id}: no [load] section with kind 'osm_pbf'; nothing to load"
+    if spec.load_kind not in LOADERS:
+        msg = f"{spec.source_id}: no [load] section of kind {sorted(LOADERS)}; nothing to load"
         raise LoadError(msg)
     with runs.recorded(conn, "load", spec.source_id) as run:
         row = conn.execute(PENDING_SQL, (spec.source_id,)).fetchone()
@@ -195,12 +225,8 @@ def load_source(conn: psycopg.Connection[Any], spec: SourceSpec, raw: Path) -> L
                     f"{path}: the file no longer matches the checksum recorded when it was fetched"
                 )
                 raise LoadError(msg)
-            counts: dict[str, int] = {}
             with conn.transaction():
-                for layer in osm.LAYERS:
-                    counts[layer] = store(
-                        conn, version_id, read_layer(path, layer, spec.load_themes)
-                    )
+                counts = LOADERS[str(spec.load_kind)](conn, version_id, path, spec)
                 conn.execute(
                     "UPDATE meta.source_version SET status = 'loaded' WHERE version_id = %s",
                     (version_id,),
