@@ -255,7 +255,9 @@ def _run_review(env: str, spec: SourceSpec, suggestion: str | None, limit: int) 
     return 0
 
 
-def _run_tiles(env: str, spec: SourceSpec, *, yes: bool, limit: int | None, workers: int) -> int:
+def _run_tiles(
+    env: str, spec: SourceSpec, *, yes: bool, limit: int | None, workers: int, verify: bool = False
+) -> int:
     def progress(done: int, total: int, fetched: int) -> None:
         if done % 500 == 0 or done == total:
             print(f"  {done:,} of {total:,} tiles  ({_human(fetched)})", flush=True)
@@ -263,6 +265,21 @@ def _run_tiles(env: str, spec: SourceSpec, *, yes: bool, limit: int | None, work
     with db.connect("app", environ={"CABLER_ENV": env}) as conn:
         conn.autocommit = True
         _require_registered(conn, [spec], env)
+        if verify:
+            checked = tiles.verify_tiles(
+                conn, spec, fetch.raw_dir(env), fix=yes, workers=workers, on_progress=progress
+            )
+            print(
+                f"{spec.source_id}: checked {checked.checked:,} tiles; {checked.ok:,} ok, "
+                f"{checked.corrupt:,} corrupt, {checked.missing:,} missing"
+            )
+            for name in checked.names:
+                print(f"  BAD {name}")
+            if checked.corrupt + checked.missing and not yes:
+                print("Nothing was changed. Add --yes to set damaged tiles aside and mark them.")
+            elif checked.repaired:
+                print("Damaged tiles are marked; run the tiles command again to fetch them.")
+            return 1 if (checked.corrupt + checked.missing and not yes) else 0
         try:
             with remote.make_client() as client:
                 result = tiles.fetch_tiles(
@@ -336,6 +353,9 @@ def main(argv: list[str] | None = None) -> int:
     tiles_cmd.add_argument("--yes", action="store_true", help="really download")
     tiles_cmd.add_argument("--limit", type=int, help="only the first N missing tiles")
     tiles_cmd.add_argument("--workers", type=int, default=6, help="parallel downloads")
+    tiles_cmd.add_argument(
+        "--verify", action="store_true", help="re-check stored tiles against checksums"
+    )
     args = parser.parse_args(argv)
 
     specs = sources.load_all()
@@ -363,7 +383,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.action == "tiles":
         (tile_spec,) = _select(specs, [args.source])
         return _run_tiles(
-            args.name, tile_spec, yes=args.yes, limit=args.limit, workers=args.workers
+            args.name,
+            tile_spec,
+            yes=args.yes,
+            limit=args.limit,
+            workers=args.workers,
+            verify=args.verify,
         )
 
     if args.action == "validate":
