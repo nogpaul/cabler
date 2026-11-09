@@ -180,16 +180,20 @@ def snapshot_file(raw: Path, local_path: str) -> Path:
 def _load_osm(
     conn: psycopg.Connection[Any], version_id: int, path: Path, spec: SourceSpec
 ) -> dict[str, int]:
-    return {
+    counts = {
         layer: store(conn, version_id, read_layer(path, layer, spec.load_themes))
         for layer in osm.LAYERS
     }
+    # Fresh statistics, so that the diff and apply queries that follow get a sound plan.
+    conn.execute("ANALYZE raw.osm_object")
+    return counts
 
 
 def _load_mastr(
     conn: psycopg.Connection[Any], version_id: int, path: Path, spec: SourceSpec
 ) -> dict[str, int]:
     features.store(conn, version_id, mastr.read_export(path, spec.load_themes))
+    conn.execute("ANALYZE raw.feature")
     return _feature_counts(conn, version_id)
 
 

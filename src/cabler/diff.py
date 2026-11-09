@@ -195,15 +195,19 @@ class _Statements:
     kinds: str
     fields: str
     total: str
+    analyze: str  # refresh statistics of the change table, for the apply queries that follow
 
 
-OSM_STATEMENTS = _Statements(BASELINE_SQL, COMPARE_SQL, KINDS_SQL, FIELDS_SQL, TOTAL_SQL)
+OSM_STATEMENTS = _Statements(
+    BASELINE_SQL, COMPARE_SQL, KINDS_SQL, FIELDS_SQL, TOTAL_SQL, "ANALYZE raw.osm_change"
+)
 FEATURE_STATEMENTS = _Statements(
     FEATURE_BASELINE_SQL,
     FEATURE_COMPARE_SQL,
     FEATURE_KINDS_SQL,
     FEATURE_FIELDS_SQL,
     FEATURE_TOTAL_SQL,
+    "ANALYZE raw.feature_change",
 )
 
 
@@ -219,6 +223,7 @@ def diff_version(
         conn.execute(sql.baseline, {"new": version_id})
     else:
         conn.execute(sql.compare, {"new": version_id, "old": previous_id})
+    conn.execute(sql.analyze)
     kinds = {str(k): int(n) for k, n in conn.execute(sql.kinds, (version_id,)).fetchall()}
     fields = {str(f): int(n) for f, n in conn.execute(sql.fields, (version_id,)).fetchall()}
     return DiffStep(

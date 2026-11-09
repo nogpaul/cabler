@@ -12,8 +12,10 @@ import io
 import os
 import zipfile
 from pathlib import Path
+from typing import Any
 
 import httpx
+import psycopg
 import pytest
 
 from cabler import apply, db, diff, fetch, load, remote, sources
@@ -164,6 +166,14 @@ RELEASE_2 = export(
 )
 
 
+def analysed(conn: psycopg.Connection[Any], table: str) -> bool:
+    """A never-analysed table has reltuples = -1; the pipeline must have refreshed it."""
+    row = conn.execute(
+        "SELECT reltuples FROM pg_class WHERE oid = %s::regclass", (table,)
+    ).fetchone()
+    return row is not None and row[0] >= 0
+
+
 def make_spec() -> sources.SourceSpec:
     base = sources.load_all()["mastr_bulk"]
     return dataclasses.replace(
@@ -198,13 +208,16 @@ def test_wind_units_are_diffed_decoded_checked_and_kept_with_history(tmp_path: P
         sources.register(conn, spec)
         first = fetch.fetch_source(conn, publisher.client, spec, tmp_path)
         load.load_source(conn, spec, tmp_path)
+        assert analysed(conn, "raw.feature")
 
         (baseline,) = diff.diff_source(conn, spec).steps
         assert baseline.baseline
+        assert analysed(conn, "raw.feature_change")
         # four units, five catalogue values and one catalogue category
         assert (baseline.added, baseline.total_after) == (10, 10)
 
         applied = apply.apply_source(conn, spec)
+        assert analysed(conn, "staging.wind_unit")
         (step,) = applied.steps
         assert (step.opened, step.closed, step.current) == (4, 0, 4)
         assert step.kinds == {"In Betrieb": 2, "In Planung": 2}
