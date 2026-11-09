@@ -198,11 +198,19 @@ class _Statements:
     current: str
     kinds: str
     flags: str
+    analyze: str  # refresh statistics of the staging table for the stages that read it next
 
 
-OSM_STATEMENTS = _Statements(CLOSE_SQL, OPEN_SQL, CURRENT_SQL, KINDS_SQL, FLAGS_SQL)
+OSM_STATEMENTS = _Statements(
+    CLOSE_SQL, OPEN_SQL, CURRENT_SQL, KINDS_SQL, FLAGS_SQL, "ANALYZE staging.osm_power_feature"
+)
 WIND_STATEMENTS = _Statements(
-    WIND_CLOSE_SQL, WIND_OPEN_SQL, WIND_CURRENT_SQL, WIND_KINDS_SQL, WIND_FLAGS_SQL
+    WIND_CLOSE_SQL,
+    WIND_OPEN_SQL,
+    WIND_CURRENT_SQL,
+    WIND_KINDS_SQL,
+    WIND_FLAGS_SQL,
+    "ANALYZE staging.wind_unit",
 )
 
 
@@ -271,6 +279,7 @@ def apply_version(
     params = {"source": source_id, "version": version_id}
     closed = conn.execute(sql.close, params).rowcount
     opened = conn.execute(sql.open, params).rowcount
+    conn.execute(sql.analyze)
     current = conn.execute(sql.current, (source_id,)).fetchone()
     return ApplyStep(
         version_id=version_id,
