@@ -15,3 +15,7 @@ allowed_hosts = ["geodienste.bfn.de"]
 max_bytes = 600_000_000
 format = "gml.zip"
 probe = "none"
+
+[load]
+kind = "ogr"
+themes = ["landscape_area"]

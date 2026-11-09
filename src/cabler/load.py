@@ -19,7 +19,7 @@ import pyogrio
 import pyogrio.raw
 from psycopg import sql
 
-from cabler import features, mastr, osm, runs
+from cabler import features, mastr, ogr, osm, runs
 from cabler.sources import SourceSpec
 
 BATCH_SIZE = 2000
@@ -197,6 +197,14 @@ def _load_mastr(
     return _feature_counts(conn, version_id)
 
 
+def _load_ogr(
+    conn: psycopg.Connection[Any], version_id: int, path: Path, spec: SourceSpec
+) -> dict[str, int]:
+    features.store(conn, version_id, ogr.read_dataset(path, spec.load_themes))
+    conn.execute("ANALYZE raw.feature")
+    return _feature_counts(conn, version_id)
+
+
 def _feature_counts(conn: psycopg.Connection[Any], version_id: int) -> dict[str, int]:
     rows = conn.execute(
         "SELECT layer, count(*) FROM raw.feature WHERE version_id = %s GROUP BY layer ORDER BY 1",
@@ -208,6 +216,7 @@ def _feature_counts(conn: psycopg.Connection[Any], version_id: int) -> dict[str,
 LOADERS: dict[str, Callable[[psycopg.Connection[Any], int, Path, SourceSpec], dict[str, int]]] = {
     "osm_pbf": _load_osm,
     "mastr_xml": _load_mastr,
+    "ogr": _load_ogr,
 }
 
 

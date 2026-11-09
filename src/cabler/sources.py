@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 
 import psycopg
 
-from cabler import db, mastr, osm
+from cabler import db, mastr, ogr, osm
 
 SOURCES_DIR = db.REPO_ROOT / "config" / "sources"
 SOURCE_ID = re.compile(r"^[a-z0-9_]+$")
@@ -39,7 +39,13 @@ TOP_LEVEL_KEYS = {
 DOWNLOAD_KEYS = {"url", "allowed_hosts", "max_bytes", "format", "probe"}
 PROBES = {"head", "none"}
 LOAD_KEYS = {"kind", "themes"}
-LOAD_KINDS = {"osm_pbf", "mastr_xml"}
+# What a [load] section of each kind may ask for: the themes its reader knows.
+LOAD_THEMES: dict[str, Mapping[str, object]] = {
+    "osm_pbf": osm.THEMES,
+    "mastr_xml": mastr.THEMES,
+    "ogr": ogr.THEMES,
+}
+LOAD_KINDS = set(LOAD_THEMES)
 TILES_KEYS = {"kind"}
 TILES_KINDS = {"opengeodata_index"}
 
@@ -102,7 +108,7 @@ def _parse_load(table: object, origin: str) -> tuple[str | None, tuple[str, ...]
     if kind not in LOAD_KINDS:
         msg = f"{origin}: load.kind must be one of {sorted(LOAD_KINDS)}, got {kind!r}"
         raise SourceConfigError(msg)
-    known = sorted(osm.THEMES if kind == "osm_pbf" else mastr.THEMES)
+    known = sorted(LOAD_THEMES[kind])
     themes = table.get("themes")
     if (
         not isinstance(themes, list)
