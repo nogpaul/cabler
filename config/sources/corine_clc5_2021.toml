@@ -11,3 +11,7 @@ url = "https://daten.gdz.bkg.bund.de/produkte/dlm/clc5_2021/aktuell/clc5_2021.ut
 allowed_hosts = ["daten.gdz.bkg.bund.de"]
 max_bytes = 2_500_000_000
 format = "gpkg.zip"
+
+[load]
+kind = "ogr"
+themes = ["land_cover"]
