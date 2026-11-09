@@ -116,7 +116,7 @@ def test_wrong_themes_members_layers_and_archives_are_refused(tmp_path: Path) ->
     archive = make_zip(tmp_path, ROWS, "areas.gpkg")
     with pytest.raises(OgrError, match="unknown themes"):
         list(ogr.read_dataset(archive, ("rivers",)))
-    with pytest.raises(OgrError, match="no member"):
+    with pytest.raises(OgrError, match="0 members matching"):
         list(ogr.features(archive, Theme("other.gpkg", "areas", "x")))
     with pytest.raises(OgrError, match="no layer"):
         list(ogr.features(archive, Theme("areas.gpkg", "nothing", "x")))
@@ -157,9 +157,10 @@ def test_only_epsg_coordinate_systems_are_accepted(crs: str | None, ok: bool) ->
             ogr.srid_of(crs, "x")
 
 
-def test_the_documented_themes_cover_land_cover_and_the_protected_areas() -> None:
+def test_the_documented_themes_cover_land_cover_parcels_and_the_protected_areas() -> None:
     assert set(ogr.THEMES) == {
         "land_cover",
+        "parcel",
         "nature_reserve",
         "habitat_area",
         "bird_area",

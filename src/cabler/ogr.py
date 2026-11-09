@@ -13,6 +13,7 @@ the zip's own checksum, read, and deleted again.
 
 from __future__ import annotations
 
+import fnmatch
 import math
 import shutil
 import tempfile
@@ -25,6 +26,7 @@ from typing import Any
 import pyogrio.errors
 import pyogrio.raw
 
+from cabler import tileset
 from cabler.features import Feature
 
 BATCH = 20_000
@@ -63,6 +65,8 @@ THEMES: dict[str, Theme] = {
     "landscape_area": Theme(
         "Landschaftsschutzgebiete.xml", "Landschaftsschutzgebiete", "landscape_area", key="gml_id"
     ),
+    # One GeoPackage per district, named after it, so the member is found by its extension.
+    "parcel": Theme("*.gpkg", "Flurstueck", "parcel", key="flstkennz", unpack=True),
 }
 
 
@@ -139,24 +143,51 @@ def features(archive_path: Path, theme: Theme) -> Iterator[Feature]:
         msg = f"{archive_path} is not a zip file"
         raise OgrError(msg) from exc
     with archive:
-        if theme.member not in archive.namelist():
-            msg = f"the archive has no member {theme.member}"
-            raise OgrError(msg)
+        member = _member(archive.namelist(), theme.member)
         if not theme.unpack:
-            yield from _features(f"/vsizip/{archive_path}/{theme.member}", theme, batched=False)
+            yield from _features(f"/vsizip/{archive_path}/{member}", theme, batched=False)
             return
         with tempfile.TemporaryDirectory(prefix="cabler-ogr-") as scratch:
-            unpacked = Path(scratch) / Path(theme.member).name
-            with archive.open(theme.member) as source, unpacked.open("wb") as target:
+            unpacked = Path(scratch) / Path(member).name
+            with archive.open(member) as source, unpacked.open("wb") as target:
                 shutil.copyfileobj(source, target, 1 << 22)
             yield from _features(str(unpacked), theme, batched=True)
 
 
-def read_dataset(path: Path, themes: tuple[str, ...]) -> Iterator[Feature]:
-    """All features of the chosen themes from a zip."""
+def _member(names: list[str], wanted: str) -> str:
+    """The member that is named ``wanted``, or, for a pattern such as ``*.gpkg``, the one match."""
+    found = [n for n in names if fnmatch.fnmatchcase(n, wanted)]
+    if len(found) != 1:
+        msg = f"the archive has {len(found)} members matching {wanted}, expected exactly one"
+        raise OgrError(msg)
+    return found[0]
+
+
+def _check_themes(themes: tuple[str, ...]) -> None:
     unknown = [name for name in themes if name not in THEMES]
     if unknown:
         msg = f"unknown themes {unknown}; known: {sorted(THEMES)}"
         raise OgrError(msg)
+
+
+def read_dataset(path: Path, themes: tuple[str, ...]) -> Iterator[Feature]:
+    """All features of the chosen themes from a zip."""
+    _check_themes(themes)
     for name in themes:
         yield from features(path, THEMES[name])
+
+
+def read_tileset(listing: Path, themes: tuple[str, ...]) -> Iterator[Feature]:
+    """All features of the chosen themes from every tile of a tile-set snapshot.
+
+    Each tile is checked against the checksum recorded for it before it is read. The identifier of
+    a feature must be unique over the whole set; the database enforces that on insert.
+    """
+    _check_themes(themes)
+    try:
+        tiles = tileset.verified_tiles(listing)
+    except tileset.TileSetError as exc:
+        raise OgrError(str(exc)) from exc
+    for _tile, path in tiles:
+        for name in themes:
+            yield from features(path, THEMES[name])
