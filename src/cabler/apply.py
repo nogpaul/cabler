@@ -6,8 +6,9 @@ row: reprojected to EPSG:25832, classified (substation, line, wind turbine, ...)
 and output parsed and data-quality findings recorded in ``qa_flags``. Nothing is ever deleted, so
 the state at any earlier snapshot can be read back.
 
-Two kinds of source have an applier: OpenStreetMap power data (``staging.osm_power_feature``) and
-MaStR wind units (``staging.wind_unit``, catalogue codes decoded, coordinates checked).
+Four kinds of source have an applier: OpenStreetMap power data (``staging.osm_power_feature``),
+MaStR wind units (``staging.wind_unit``, catalogue codes decoded, coordinates checked), CORINE land
+cover (``staging.land_cover``) and the BfN protected areas (``staging.protected_area``).
 
 Each snapshot is applied in its own transaction, oldest first, and then marked ``applied``.
 """
@@ -19,7 +20,7 @@ from typing import Any
 
 import psycopg
 
-from cabler import runs
+from cabler import polygon_sql, runs
 from cabler.sources import SourceSpec
 
 PENDING_SQL = """
@@ -212,16 +213,37 @@ WIND_STATEMENTS = _Statements(
     WIND_FLAGS_SQL,
     "ANALYZE staging.wind_unit",
 )
+LAND_COVER_STATEMENTS = _Statements(
+    polygon_sql.LAND_COVER_CLOSE_SQL,
+    polygon_sql.LAND_COVER_OPEN_SQL,
+    polygon_sql.LAND_COVER_CURRENT_SQL,
+    polygon_sql.LAND_COVER_KINDS_SQL,
+    polygon_sql.LAND_COVER_FLAGS_SQL,
+    "ANALYZE staging.land_cover",
+)
+PROTECTED_STATEMENTS = _Statements(
+    polygon_sql.PROTECTED_CLOSE_SQL,
+    polygon_sql.PROTECTED_OPEN_SQL,
+    polygon_sql.PROTECTED_CURRENT_SQL,
+    polygon_sql.PROTECTED_KINDS_SQL,
+    polygon_sql.PROTECTED_FLAGS_SQL,
+    "ANALYZE staging.protected_area",
+)
 
 
 def _statements_for(spec: SourceSpec) -> _Statements:
-    if spec.load_kind == "osm_pbf" and "power" in spec.load_themes:
+    themes = set(spec.load_themes)
+    if spec.load_kind == "osm_pbf" and "power" in themes:
         return OSM_STATEMENTS
-    if spec.load_kind == "mastr_xml" and "wind" in spec.load_themes:
+    if spec.load_kind == "mastr_xml" and "wind" in themes:
         return WIND_STATEMENTS
+    if spec.load_kind == "ogr" and themes == {"land_cover"}:
+        return LAND_COVER_STATEMENTS
+    if spec.load_kind == "ogr" and themes and themes <= set(polygon_sql.PROTECTED_KINDS):
+        return PROTECTED_STATEMENTS
     msg = (
-        f"{spec.source_id}: no applier for this source; "
-        "known: OSM sources with the power theme, MaStR sources with the wind theme"
+        f"{spec.source_id}: no applier for this source; known: OSM sources with the power "
+        "theme, MaStR sources with the wind theme, land cover, and the protected-area themes"
     )
     raise ApplyError(msg)
 
