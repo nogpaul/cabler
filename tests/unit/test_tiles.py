@@ -44,6 +44,48 @@ def test_a_bad_index_is_refused(body: bytes, message: str) -> None:
         tiles.parse_index(body)
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        "a.tif",
+        "gru_vereinf_05117000_Mülheim_ad_Ruhr_EPSG25832_GeoPackage.zip",
+        "x-1_2.y.zip",
+        "Ñandú.zip",
+    ],
+)
+def test_file_names_in_any_language_are_accepted(name: str) -> None:
+    assert tiles.is_safe_name(name)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "",
+        ".",
+        "..",
+        ".hidden",
+        "../x.tif",
+        "a/b.tif",
+        "a\\b.tif",
+        "a b.tif",
+        "a\nb.tif",
+        "a\x00b.tif",
+        "a?x=1.tif",
+        "a#b.tif",
+        "a%2fb.tif",
+        "x" * 201,
+    ],
+)
+def test_names_that_could_leave_a_folder_or_a_url_are_refused(name: str) -> None:
+    assert not tiles.is_safe_name(name)
+
+
+def test_an_index_with_an_unsafe_name_is_refused_before_anything_is_downloaded() -> None:
+    body = b'<r><file name="../escape.tif" size="1" timestamp="2023-05-22T08:43:45"/></r>'
+    with pytest.raises(TilesError, match="not a plain file name"):
+        tiles.parse_index(body)
+
+
 def known(name: str, size: int, second: int) -> KnownTile:
     return KnownTile(name, at(second), size, f"tiles/{name}", "a" * 64)
 

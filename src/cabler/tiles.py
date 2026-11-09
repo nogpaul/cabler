@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import time
 import uuid
@@ -36,6 +37,8 @@ from cabler.remote import RemoteError
 from cabler.sources import SourceSpec
 
 INDEX_LIMIT = 100_000_000
+# \w is a letter, digit or underscore in any language ("Mülheim"); the dot and hyphen are added.
+TILE_NAME = re.compile(r"[\w.-]+")
 ATTEMPTS = 3
 BACKOFF_SECONDS = (1.0, 4.0)
 FAILURES_SHOWN = 10
@@ -134,6 +137,15 @@ class TileResult:
         }
 
 
+def is_safe_name(name: str) -> bool:
+    """A plain file name: letters of any language, digits, ``.``, ``_`` and ``-``.
+
+    It cannot hold a path separator, a space, a control character, a query or fragment mark, or
+    start with a dot, so joining it to a folder or to a URL can never leave that folder or URL.
+    """
+    return 0 < len(name) <= 200 and TILE_NAME.fullmatch(name) is not None and name[0] != "."
+
+
 def parse_index(xml: bytes) -> list[TileEntry]:
     """Read the tiles from an opengeodata index: ``<file name=".." size=".." timestamp=".."/>``.
 
@@ -147,18 +159,18 @@ def parse_index(xml: bytes) -> list[TileEntry]:
     entries = []
     for element in root.iter("file"):
         try:
-            entries.append(
-                TileEntry(
-                    name=element.attrib["name"],
-                    size=int(element.attrib["size"]),
-                    timestamp=datetime.fromisoformat(element.attrib["timestamp"]).replace(
-                        tzinfo=UTC
-                    ),
-                )
+            entry = TileEntry(
+                name=element.attrib["name"],
+                size=int(element.attrib["size"]),
+                timestamp=datetime.fromisoformat(element.attrib["timestamp"]).replace(tzinfo=UTC),
             )
         except (KeyError, ValueError) as exc:
             msg = f"an index entry is unusable: {dict(element.attrib)}"
             raise TilesError(msg) from exc
+        if not is_safe_name(entry.name):
+            msg = f"an index entry has a name that is not a plain file name: {entry.name!r}"
+            raise TilesError(msg)
+        entries.append(entry)
     if not entries:
         msg = "the index lists no files"
         raise TilesError(msg)
@@ -243,6 +255,9 @@ def _store(
     tiles_dir = raw / spec.source_id / "tiles"
     tiles_dir.mkdir(parents=True, exist_ok=True)
     target = tiles_dir / entry.name
+    if target.resolve().parent != tiles_dir.resolve():  # parse_index refuses such names already
+        msg = f"{entry.name}: the tile would be stored outside its folder"
+        raise TilesError(msg)
     if old is not None and target.exists():
         keep = tiles_dir / "superseded"
         keep.mkdir(exist_ok=True)
