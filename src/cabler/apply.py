@@ -6,6 +6,9 @@ row: reprojected to EPSG:25832, classified (substation, line, wind turbine, ...)
 and output parsed and data-quality findings recorded in ``qa_flags``. Nothing is ever deleted, so
 the state at any earlier snapshot can be read back.
 
+Two kinds of source have an applier: OpenStreetMap power data (``staging.osm_power_feature``) and
+MaStR wind units (``staging.wind_unit``, catalogue codes decoded, coordinates checked).
+
 Each snapshot is applied in its own transaction, oldest first, and then marked ``applied``.
 """
 
@@ -97,8 +100,122 @@ GROUP BY flag
 """
 
 
+WIND_CLOSE_SQL = """
+UPDATE staging.wind_unit u
+SET valid_to_version_id = %(version)s
+FROM raw.feature_change c
+WHERE c.version_id = %(version)s
+  AND c.layer = 'wind_unit'
+  AND c.change IN ('changed', 'removed')
+  AND u.source_id = %(source)s
+  AND u.unit_key = c.feature_key
+  AND u.valid_to_version_id IS NULL
+"""
+# Coordinates: a unit gets at most one coordinate finding, the most specific one. The box of
+# Germany is wide on purpose, so that offshore units are not flagged. 6.0 / 50.0 is the placeholder
+# that appears in the register where no position was entered.
+WIND_OPEN_SQL = """
+WITH catalogue AS (
+    SELECT coalesce(jsonb_object_agg(feature_key, attributes ->> 'Wert'), '{}'::jsonb) AS m
+    FROM raw.feature
+    WHERE version_id = %(version)s AND layer = 'catalogue_value'
+)
+INSERT INTO staging.wind_unit
+    (source_id, unit_key, valid_from_version_id, state_key, status_code, status, name, wind_farm,
+     municipality_key, municipality, district, postcode, manufacturer, type_designation,
+     location_type, gross_kw, net_kw, hub_height_m, rotor_diameter_m, commissioned,
+     planned_commissioning, decommissioned, grid_location_key, qa_flags, geom)
+SELECT %(source)s, f.feature_key, %(version)s,
+       left(a ->> 'Gemeindeschluessel', 2),
+       CASE WHEN a ->> 'EinheitBetriebsstatus' ~ '^[0-9]{1,9}$'
+            THEN (a ->> 'EinheitBetriebsstatus')::integer END,
+       cat.m ->> (a ->> 'EinheitBetriebsstatus'),
+       a ->> 'NameStromerzeugungseinheit', a ->> 'NameWindpark',
+       a ->> 'Gemeindeschluessel', a ->> 'Gemeinde', a ->> 'Landkreis', a ->> 'Postleitzahl',
+       cat.m ->> (a ->> 'Hersteller'), a ->> 'Typenbezeichnung',
+       cat.m ->> (a ->> 'WindAnLandOderAufSee'),
+       gross.v, staging.parse_number(a ->> 'Nettonennleistung'),
+       staging.parse_number(a ->> 'Nabenhoehe'), staging.parse_number(a ->> 'Rotordurchmesser'),
+       staging.parse_date(a ->> 'Inbetriebnahmedatum'),
+       staging.parse_date(a ->> 'GeplantesInbetriebnahmedatum'),
+       staging.parse_date(a ->> 'DatumEndgueltigeStilllegung'),
+       a ->> 'LokationMaStRNummer',
+       array_remove(ARRAY[
+           CASE WHEN f.geom IS NULL THEN 'coordinate_missing'
+                WHEN abs(ST_X(f.geom) - 6.0) < 1e-9 AND abs(ST_Y(f.geom) - 50.0) < 1e-9
+                THEN 'coordinate_placeholder'
+                WHEN NOT (ST_X(f.geom) BETWEEN 3.0 AND 15.5 AND ST_Y(f.geom) BETWEEN 47.0 AND 56.0)
+                THEN 'coordinate_outside_germany'
+                WHEN sb.state_key IS NOT NULL
+                 AND NOT (ST_X(f.geom) BETWEEN sb.lon_min AND sb.lon_max
+                          AND ST_Y(f.geom) BETWEEN sb.lat_min AND sb.lat_max)
+                THEN 'coordinate_outside_state' END,
+           CASE WHEN gross.v IS NULL OR gross.v <= 0 THEN 'capacity_missing' END,
+           CASE WHEN gross.v > 20000 THEN 'capacity_implausible' END,
+           CASE WHEN a ->> 'Inbetriebnahmedatum' IS NOT NULL
+                 AND staging.parse_date(a ->> 'Inbetriebnahmedatum') IS NULL
+                THEN 'date_unparsable' END
+       ], NULL),
+       CASE WHEN f.geom IS NOT NULL THEN ST_Transform(f.geom, 25832) END
+FROM raw.feature_change c
+JOIN raw.feature f
+  ON f.version_id = c.version_id AND f.layer = c.layer AND f.feature_key = c.feature_key
+CROSS JOIN catalogue cat
+CROSS JOIN LATERAL (SELECT f.attributes AS a) x
+CROSS JOIN LATERAL (SELECT staging.parse_number(a ->> 'Bruttoleistung') AS v) gross
+LEFT JOIN staging.state_box sb ON sb.state_key = left(a ->> 'Gemeindeschluessel', 2)
+WHERE c.version_id = %(version)s
+  AND c.layer = 'wind_unit'
+  AND c.change IN ('added', 'changed')
+"""
+WIND_CURRENT_SQL = """
+SELECT count(*) FROM staging.wind_unit
+WHERE source_id = %s AND valid_to_version_id IS NULL
+"""
+WIND_KINDS_SQL = """
+SELECT coalesce(status, 'unknown'), count(*) FROM staging.wind_unit
+WHERE source_id = %s AND valid_to_version_id IS NULL
+GROUP BY 1
+"""
+WIND_FLAGS_SQL = """
+SELECT flag, count(*)
+FROM staging.wind_unit, unnest(qa_flags) AS flag
+WHERE source_id = %s AND valid_to_version_id IS NULL
+GROUP BY flag
+"""
+
+
 class ApplyError(Exception):
     """A snapshot cannot be applied: nothing was loaded, or no applier knows its themes."""
+
+
+@dataclass(frozen=True)
+class _Statements:
+    """The SQL that applies one kind of source to its staging table."""
+
+    close: str
+    open: str
+    current: str
+    kinds: str
+    flags: str
+
+
+OSM_STATEMENTS = _Statements(CLOSE_SQL, OPEN_SQL, CURRENT_SQL, KINDS_SQL, FLAGS_SQL)
+WIND_STATEMENTS = _Statements(
+    WIND_CLOSE_SQL, WIND_OPEN_SQL, WIND_CURRENT_SQL, WIND_KINDS_SQL, WIND_FLAGS_SQL
+)
+
+
+def _statements_for(spec: SourceSpec) -> _Statements:
+    if spec.load_kind == "osm_pbf" and "power" in spec.load_themes:
+        return OSM_STATEMENTS
+    if spec.load_kind == "mastr_xml" and "wind" in spec.load_themes:
+        return WIND_STATEMENTS
+    msg = (
+        f"{spec.source_id}: no applier for this source; "
+        "known: OSM sources with the power theme, MaStR sources with the wind theme"
+    )
+    raise ApplyError(msg)
 
 
 @dataclass(frozen=True)
@@ -144,33 +261,36 @@ def _histogram(conn: psycopg.Connection[Any], query: str, source_id: str) -> dic
     return {str(key): int(count) for key, count in sorted(rows)}
 
 
-def apply_version(conn: psycopg.Connection[Any], source_id: str, version_id: int) -> ApplyStep:
+def apply_version(
+    conn: psycopg.Connection[Any],
+    source_id: str,
+    version_id: int,
+    sql: _Statements = OSM_STATEMENTS,
+) -> ApplyStep:
     """Close and open staging rows for one snapshot. The caller owns the transaction."""
     params = {"source": source_id, "version": version_id}
-    closed = conn.execute(CLOSE_SQL, params).rowcount
-    opened = conn.execute(OPEN_SQL, params).rowcount
-    current = conn.execute(CURRENT_SQL, (source_id,)).fetchone()
+    closed = conn.execute(sql.close, params).rowcount
+    opened = conn.execute(sql.open, params).rowcount
+    current = conn.execute(sql.current, (source_id,)).fetchone()
     return ApplyStep(
         version_id=version_id,
         opened=opened,
         closed=closed,
         current=int(current[0]) if current else 0,
-        kinds=_histogram(conn, KINDS_SQL, source_id),
-        flags=_histogram(conn, FLAGS_SQL, source_id),
+        kinds=_histogram(conn, sql.kinds, source_id),
+        flags=_histogram(conn, sql.flags, source_id),
     )
 
 
 def apply_source(conn: psycopg.Connection[Any], spec: SourceSpec) -> ApplyResult:
     """Run the apply stage for one source: every diffed snapshot not yet applied, oldest first."""
-    if spec.load_kind != "osm_pbf" or "power" not in spec.load_themes:
-        msg = f"{spec.source_id}: no applier for this source; only OSM sources with the power theme"
-        raise ApplyError(msg)
+    sql = _statements_for(spec)
     with runs.recorded(conn, "apply", spec.source_id) as run:
         pending = [int(r[0]) for r in conn.execute(PENDING_SQL, (spec.source_id,)).fetchall()]
         steps: list[ApplyStep] = []
         for version_id in pending:
             with conn.transaction():
-                steps.append(apply_version(conn, spec.source_id, version_id))
+                steps.append(apply_version(conn, spec.source_id, version_id, sql))
                 conn.execute(
                     "UPDATE meta.source_version SET status = 'applied' WHERE version_id = %s",
                     (version_id,),
