@@ -1,0 +1,23 @@
+source_id = "alkis_nrw"
+title = "ALKIS Nordrhein-Westfalen, Grundrissdaten vereinfacht (parcels, buildings, land use), GeoPackage per district"
+publisher = "Land Nordrhein-Westfalen, Bezirksregierung Köln, Geobasis NRW"
+licence_id = "dl-de/zero-2-0"
+licence_url = "https://www.govdata.de/dl-de/zero-2-0"
+attribution = "Geobasis NRW, Land NRW (dl-de/zero-2-0)"
+homepage = "https://www.opengeodata.nrw.de/produkte/geobasis/lk/akt/gru_vereinfacht_gpkg/"
+
+[download]
+# The folder answers with an index of every file (name, size, time); one zip per district or city.
+# max_bytes is the limit for one file, not for the whole set (the largest is 324 MB).
+url = "https://www.opengeodata.nrw.de/produkte/geobasis/lk/akt/gru_vereinfacht_gpkg/"
+allowed_hosts = ["www.opengeodata.nrw.de"]
+max_bytes = 400_000_000
+format = "zip"
+
+[tiles]
+kind = "opengeodata_index"
+
+# Only the parcels are read for now; the zips also hold buildings, land use and boundaries.
+[load]
+kind = "ogr"
+themes = ["parcel"]

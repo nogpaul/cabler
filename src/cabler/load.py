@@ -19,7 +19,7 @@ import pyogrio
 import pyogrio.raw
 from psycopg import sql
 
-from cabler import features, mastr, ogr, osm, runs
+from cabler import features, mastr, nas, ogr, osm, runs, tileset
 from cabler.sources import SourceSpec
 
 BATCH_SIZE = 2000
@@ -200,7 +200,17 @@ def _load_mastr(
 def _load_ogr(
     conn: psycopg.Connection[Any], version_id: int, path: Path, spec: SourceSpec
 ) -> dict[str, int]:
-    features.store(conn, version_id, ogr.read_dataset(path, spec.load_themes))
+    # A tile source's snapshot is a listing of its tiles; any other is a single zip.
+    read = ogr.read_tileset if spec.tiles_kind is not None else ogr.read_dataset
+    features.store(conn, version_id, read(path, spec.load_themes))
+    conn.execute("ANALYZE raw.feature")
+    return _feature_counts(conn, version_id)
+
+
+def _load_nas(
+    conn: psycopg.Connection[Any], version_id: int, path: Path, spec: SourceSpec
+) -> dict[str, int]:
+    features.store(conn, version_id, nas.read_export(path, spec.load_themes))
     conn.execute("ANALYZE raw.feature")
     return _feature_counts(conn, version_id)
 
@@ -217,6 +227,7 @@ LOADERS: dict[str, Callable[[psycopg.Connection[Any], int, Path, SourceSpec], di
     "osm_pbf": _load_osm,
     "mastr_xml": _load_mastr,
     "ogr": _load_ogr,
+    "nas_gml": _load_nas,
 }
 
 
@@ -226,6 +237,8 @@ def load_source(conn: psycopg.Connection[Any], spec: SourceSpec, raw: Path) -> L
         msg = f"{spec.source_id}: no [load] section of kind {sorted(LOADERS)}; nothing to load"
         raise LoadError(msg)
     with runs.recorded(conn, "load", spec.source_id) as run:
+        if spec.tiles_kind is not None:
+            tileset.snapshot_set(conn, spec, raw)
         row = conn.execute(PENDING_SQL, (spec.source_id,)).fetchone()
         if row is None:
             loaded = conn.execute(LOADED_SQL, (spec.source_id,)).fetchone()

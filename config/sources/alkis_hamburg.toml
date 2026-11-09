@@ -1,0 +1,21 @@
+source_id = "alkis_hamburg"
+title = "ALKIS Hamburg, Liegenschaftskarte ausgewählte Daten (parcels, buildings, land use), NAS-GML"
+publisher = "Freie und Hansestadt Hamburg, Landesbetrieb Geoinformation und Vermessung (LGV)"
+licence_id = "dl-de/by-2-0"
+licence_url = "https://www.govdata.de/dl-de/by-2-0"
+attribution = "Freie und Hansestadt Hamburg, Landesbetrieb Geoinformation und Vermessung (LGV), dl-de/by-2-0"
+homepage = "https://suche.transparenz.hamburg.de/dataset/alkis-ausgewaehlte-daten-hamburg5"
+
+[download]
+# The export carries its date in the file name and is published quarterly, so this URL goes stale
+# (the same as the MaStR export); a resolver that reads the dataset page is planned. The host
+# redirects from daten-hamburg.de to www.daten-hamburg.de.
+url = "https://daten-hamburg.de/opendata/ALKIS_Liegenschaftskarte/ALKIS_Liegenschaftskarte_ausgewaehlteDaten_HH_2026-10-15.zip"
+allowed_hosts = ["daten-hamburg.de", "www.daten-hamburg.de"]
+max_bytes = 700_000_000
+format = "zip"
+
+# Only the parcels are read for now; the export also holds buildings, land use and much more.
+[load]
+kind = "nas_gml"
+themes = ["parcel"]

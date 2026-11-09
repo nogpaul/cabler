@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 
 import psycopg
 
-from cabler import db, mastr, ogr, osm
+from cabler import db, mastr, nas, ogr, osm
 
 SOURCES_DIR = db.REPO_ROOT / "config" / "sources"
 SOURCE_ID = re.compile(r"^[a-z0-9_]+$")
@@ -44,6 +44,7 @@ LOAD_THEMES: dict[str, Mapping[str, object]] = {
     "osm_pbf": osm.THEMES,
     "mastr_xml": mastr.THEMES,
     "ogr": ogr.THEMES,
+    "nas_gml": nas.THEMES,
 }
 LOAD_KINDS = set(LOAD_THEMES)
 TILES_KEYS = {"kind"}
