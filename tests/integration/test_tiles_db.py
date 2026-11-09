@@ -6,8 +6,10 @@ Run with:  CABLER_ENV=dev pytest -m integration   (after `python -m cabler.migra
 import dataclasses
 import os
 from pathlib import Path
+from urllib.parse import unquote
 
 import httpx
+import psycopg
 import pytest
 
 from cabler import db, remote, sources, tiles
@@ -44,7 +46,7 @@ class Publisher:
         return xml.encode()
 
     def handle(self, request: httpx.Request) -> httpx.Response:
-        name = request.url.path.rsplit("/", 1)[-1]
+        name = unquote(request.url.path.rsplit("/", 1)[-1])
         if name == "":
             body = self.index()
         elif name in self.broken:
@@ -163,6 +165,34 @@ def test_the_limit_fetches_only_the_first_missing_tiles(tmp_path: Path) -> None:
         result = tiles.fetch_tiles(conn, publisher.client, spec, tmp_path, yes=True, limit=1)
         assert (result.new, result.fetched) == (3, 1)
         assert result.planned_bytes == 100
+
+
+def test_a_tile_with_letters_of_another_language_is_fetched_and_recorded(tmp_path: Path) -> None:
+    spec, publisher = make_spec(), Publisher()
+    name = "gru_vereinf_05117000_Mülheim_ad_Ruhr.tif"
+    publisher.files[name] = (b"m" * 90, "2023-05-22T08:46:46")
+    with db.connect("app") as conn, conn.transaction(force_rollback=True):
+        sources.register(conn, spec)
+        result = tiles.fetch_tiles(conn, publisher.client, spec, tmp_path, yes=True)
+        assert (result.fetched, result.failed) == (4, 0)
+        row = conn.execute(
+            "SELECT name, size FROM meta.tile WHERE source_id = %s AND name = %s",
+            (spec.source_id, name),
+        ).fetchone()
+        assert row == (name, 90)
+        assert (tmp_path / "itest_source" / "tiles" / name).read_bytes() == b"m" * 90
+
+
+@pytest.mark.parametrize("name", ["../x.tif", "a/b.tif", ".hidden", "a b.tif", "a?b.tif"])
+def test_the_database_refuses_names_that_could_leave_a_folder_or_a_url(name: str) -> None:
+    with db.connect("app") as conn, conn.transaction(force_rollback=True):
+        sources.register(conn, make_spec())
+        with pytest.raises(psycopg.errors.CheckViolation):
+            conn.execute(
+                "INSERT INTO meta.tile (source_id, name, remote_timestamp, size, sha256,"
+                " local_path, status) VALUES (%s, %s, now(), 1, %s, 'x', 'fetched')",
+                ("itest_source", name, "a" * 64),
+            )
 
 
 def test_the_tile_table_is_readable_by_the_read_only_role() -> None:
