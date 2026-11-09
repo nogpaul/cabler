@@ -168,3 +168,65 @@ def test_the_limit_fetches_only_the_first_missing_tiles(tmp_path: Path) -> None:
 def test_the_tile_table_is_readable_by_the_read_only_role() -> None:
     with db.connect("ro") as conn:
         assert conn.execute("SELECT count(*) FROM meta.tile").fetchone() is not None
+
+
+A = "dgm1_32_280_5652_1_nw_2022.tif"
+B = "dgm1_32_280_5653_1_nw_2022.tif"
+C = "dgm1_32_281_5652_1_nw_2022.tif"
+
+
+def test_damaged_and_missing_tiles_are_found_set_aside_and_fetched_again(tmp_path: Path) -> None:
+    spec, publisher = make_spec(), Publisher()
+    folder = tmp_path / "itest_source" / "tiles"
+    with db.connect("app") as conn, conn.transaction(force_rollback=True):
+        sources.register(conn, spec)
+        tiles.fetch_tiles(conn, publisher.client, spec, tmp_path, yes=True)
+
+        healthy = tiles.verify_tiles(conn, spec, tmp_path)
+        assert (healthy.checked, healthy.ok, healthy.corrupt, healthy.missing) == (3, 3, 0, 0)
+
+        (folder / A).chmod(0o644)
+        (folder / A).write_bytes(b"damaged by a full disk")
+        (folder / B).chmod(0o644)
+        (folder / B).unlink()
+
+        report = tiles.verify_tiles(conn, spec, tmp_path)
+        assert (report.ok, report.corrupt, report.missing, report.repaired) == (1, 1, 1, False)
+        assert report.names == (A, B)
+        assert (folder / A).exists()
+
+        fixed = tiles.verify_tiles(conn, spec, tmp_path, fix=True)
+        assert fixed.repaired
+        assert not (folder / A).exists()
+        (evidence,) = (folder / "_corrupt").iterdir()
+        assert evidence.name.startswith(A)
+        assert evidence.read_bytes() == b"damaged by a full disk"
+        statuses = conn.execute(
+            "SELECT name, status FROM meta.tile WHERE source_id = %s ORDER BY name",
+            (spec.source_id,),
+        ).fetchall()
+        assert statuses == [(A, "corrupt"), (B, "corrupt"), (C, "fetched")]
+
+        again = tiles.fetch_tiles(conn, publisher.client, spec, tmp_path, yes=True)
+        assert (again.new, again.fetched, again.unchanged, again.failed) == (2, 2, 1, 0)
+        final = tiles.verify_tiles(conn, spec, tmp_path)
+        assert (final.checked, final.ok) == (3, 3)
+        rows = conn.execute(
+            "SELECT status, count(*) FROM meta.tile WHERE source_id = %s GROUP BY status",
+            (spec.source_id,),
+        ).fetchall()
+        assert rows == [("fetched", 3)]
+
+
+def test_verification_is_recorded_as_a_run(tmp_path: Path) -> None:
+    spec, publisher = make_spec(), Publisher()
+    with db.connect("app") as conn, conn.transaction(force_rollback=True):
+        sources.register(conn, spec)
+        tiles.fetch_tiles(conn, publisher.client, spec, tmp_path, yes=True)
+        tiles.verify_tiles(conn, spec, tmp_path)
+        row = conn.execute(
+            "SELECT status, result->>'checked' FROM meta.pipeline_run"
+            " WHERE stage = 'verify' AND source_id = %s",
+            (spec.source_id,),
+        ).fetchone()
+        assert row == ("succeeded", "3")

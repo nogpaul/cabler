@@ -14,6 +14,7 @@ A changed tile keeps its old file under ``superseded/``; nothing is ever deleted
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import time
@@ -47,6 +48,13 @@ WHERE source_id = %s AND status = 'fetched'
 INSERT_SQL = """
 INSERT INTO meta.tile (source_id, name, remote_timestamp, size, sha256, local_path, status)
 VALUES (%s, %s, %s, %s, %s, %s, 'fetched')
+ON CONFLICT (source_id, name, remote_timestamp) DO UPDATE
+SET size = EXCLUDED.size, sha256 = EXCLUDED.sha256, local_path = EXCLUDED.local_path,
+    status = 'fetched', fetched_at = now()
+"""
+CORRUPT_SQL = """
+UPDATE meta.tile SET status = 'corrupt'
+WHERE source_id = %s AND name = ANY(%s) AND status = 'fetched'
 """
 SUPERSEDE_SQL = """
 UPDATE meta.tile SET status = 'superseded', local_path = %s
@@ -334,6 +342,90 @@ def fetch_tiles(
             bytes_fetched=bytes_fetched,
             planned_bytes=planned_bytes,
             failures=tuple(failures[:FAILURES_SHOWN]),
+        )
+        run.result = result.to_json()
+    return result
+
+
+@dataclass(frozen=True)
+class VerifyResult:
+    source_id: str
+    checked: int
+    ok: int
+    corrupt: int
+    missing: int
+    repaired: bool
+    names: tuple[str, ...]
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "source_id": self.source_id,
+            "checked": self.checked,
+            "ok": self.ok,
+            "corrupt": self.corrupt,
+            "missing": self.missing,
+            "repaired": self.repaired,
+            "names": list(self.names),
+        }
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 22), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _state_of(raw: Path, tile: KnownTile) -> str:
+    """ok, corrupt (size or checksum differs) or missing, for one stored tile."""
+    path = raw / tile.local_path
+    if not path.exists():
+        return "missing"
+    if path.stat().st_size != tile.size or _sha256(path) != tile.sha256:
+        return "corrupt"
+    return "ok"
+
+
+def verify_tiles(
+    conn: psycopg.Connection[Any],
+    spec: SourceSpec,
+    raw: Path,
+    *,
+    fix: bool = False,
+    workers: int = 6,
+    on_progress: Callable[[int, int, int], None] | None = None,
+) -> VerifyResult:
+    """Re-hash every stored tile. With ``fix`` damaged files are set aside and the tiles marked."""
+    with runs.recorded(conn, "verify", spec.source_id) as run:
+        known = [
+            KnownTile(str(r[0]), r[1], int(r[2]), str(r[3]), str(r[4]))
+            for r in conn.execute(KNOWN_SQL, (spec.source_id,)).fetchall()
+        ]
+        states: dict[str, str] = {}
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            jobs = {pool.submit(_state_of, raw, tile): tile for tile in known}
+            for done, job in enumerate(as_completed(jobs), 1):
+                states[jobs[job].name] = job.result()
+                if on_progress is not None:
+                    on_progress(done, len(known), 0)
+        bad = sorted(name for name, state in states.items() if state != "ok")
+        if fix and bad:
+            aside = raw / spec.source_id / "tiles" / "_corrupt"
+            aside.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+            for tile in known:
+                if states[tile.name] == "corrupt":
+                    os.replace(raw / tile.local_path, aside / f"{tile.name}.{stamp}")
+            conn.execute(CORRUPT_SQL, (spec.source_id, bad))
+        result = VerifyResult(
+            source_id=spec.source_id,
+            checked=len(known),
+            ok=len(known) - len(bad),
+            corrupt=sum(1 for s in states.values() if s == "corrupt"),
+            missing=sum(1 for s in states.values() if s == "missing"),
+            repaired=fix and bool(bad),
+            names=tuple(bad[:FAILURES_SHOWN]),
         )
         run.result = result.to_json()
     return result
