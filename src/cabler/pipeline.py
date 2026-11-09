@@ -8,7 +8,8 @@ Usage: python -m cabler.pipeline list
        python -m cabler.pipeline diff {dev,staging,production} SOURCE ...
        python -m cabler.pipeline apply {dev,staging,production} SOURCE ...
        python -m cabler.pipeline tiles {dev,staging,production} SOURCE
-           [--yes] [--limit N] [--workers N]
+           [--yes] [--limit N] [--workers N] [--verify]
+       python -m cabler.pipeline catalogue {dev,staging,production} SOURCE ...
        python -m cabler.pipeline validate {dev,staging,production} SOURCE ...
        python -m cabler.pipeline review {dev,staging,production} SOURCE
            [--suggestion S] [--limit N]
@@ -23,13 +24,15 @@ from typing import Any
 
 import psycopg
 
-from cabler import apply, checks, db, diff, fetch, load, remote, sources, tiles, validate
+from cabler import apply, checks, db, diff, fetch, load, remote, sources, terrain, tiles, validate
 from cabler.apply import ApplyError
 from cabler.diff import DiffError
 from cabler.envgen import NAMES
+from cabler.geotiff import GeoTiffError
 from cabler.load import LoadError
 from cabler.remote import RemoteError
 from cabler.sources import SourceSpec
+from cabler.terrain import CatalogueError
 from cabler.tiles import TilesError
 from cabler.validate import ValidateError
 
@@ -233,6 +236,34 @@ def _run_validate(env: str, selected: list[SourceSpec]) -> int:
     return 1 if failures else 0
 
 
+def _run_catalogue(env: str, selected: list[SourceSpec]) -> int:
+    failures = 0
+    with db.connect("app", environ={"CABLER_ENV": env}) as conn:
+        conn.autocommit = True
+        _require_registered(conn, selected, env)
+        for spec in selected:
+            try:
+                result = terrain.catalogue_source(conn, spec, fetch.raw_dir(env))
+            except (CatalogueError, GeoTiffError) as exc:
+                failures += 1
+                print(f"ERROR {spec.source_id}: {exc}", file=sys.stderr)
+                continue
+            x_min, y_min, x_max, y_max = result.extent
+            print(
+                f"catalogued {spec.source_id:<16} {result.tiles:,} tiles ({result.new:,} new), "
+                f"{result.area_km2:,.1f} km2"
+            )
+            corners = f"{x_min:,.0f} {y_min:,.0f} to {x_max:,.0f} {y_max:,.0f}"
+            print(f"{'':<29}extent: {corners} (EPSG:25832)")
+            flags = ", ".join(f"{k} {n:,}" for k, n in result.flags.items()) or "none"
+            print(f"{'':<29}findings: {flags}")
+            print(
+                f"{'':<29}set: {result.duplicate_corners} duplicate corners, "
+                f"{result.overlaps} overlaps, {result.holes} holes ({result.hole_km2} km2)"
+            )
+    return 1 if failures else 0
+
+
 def _run_review(env: str, spec: SourceSpec, suggestion: str | None, limit: int) -> int:
     with db.connect("app", environ={"CABLER_ENV": env}) as conn:
         counts = validate.review_counts(conn, spec.source_id)
@@ -356,6 +387,9 @@ def main(argv: list[str] | None = None) -> int:
     tiles_cmd.add_argument(
         "--verify", action="store_true", help="re-check stored tiles against checksums"
     )
+    catalogue_cmd = commands.add_parser("catalogue", help="catalogue the tiles of terrain sources")
+    catalogue_cmd.add_argument("name", choices=NAMES)
+    catalogue_cmd.add_argument("sources", nargs="+", help="source ids to catalogue")
     args = parser.parse_args(argv)
 
     specs = sources.load_all()
@@ -390,6 +424,9 @@ def main(argv: list[str] | None = None) -> int:
             workers=args.workers,
             verify=args.verify,
         )
+
+    if args.action == "catalogue":
+        return _run_catalogue(args.name, _select(specs, args.sources))
 
     if args.action == "validate":
         return _run_validate(args.name, _select(specs, args.sources))

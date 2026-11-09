@@ -16,3 +16,6 @@ format = "tif"
 
 [tiles]
 kind = "opengeodata_index"
+
+[catalogue]
+kind = "geotiff"
