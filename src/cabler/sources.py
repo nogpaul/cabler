@@ -35,6 +35,7 @@ TOP_LEVEL_KEYS = {
     "download",
     "load",
     "tiles",
+    "catalogue",
 }
 DOWNLOAD_KEYS = {"url", "allowed_hosts", "max_bytes", "format", "probe"}
 PROBES = {"head", "none"}
@@ -49,6 +50,8 @@ LOAD_THEMES: dict[str, Mapping[str, object]] = {
 LOAD_KINDS = set(LOAD_THEMES)
 TILES_KEYS = {"kind"}
 TILES_KINDS = {"opengeodata_index"}
+CATALOGUE_KEYS = {"kind"}
+CATALOGUE_KINDS = {"geotiff"}
 
 
 class SourceConfigError(Exception):
@@ -72,6 +75,7 @@ class SourceSpec:
     load_themes: tuple[str, ...] = ()
     probe: str = "head"
     tiles_kind: str | None = None
+    catalogue_kind: str | None = None
 
 
 def _text(table: Mapping[str, Any], key: str, origin: str) -> str:
@@ -136,6 +140,21 @@ def _parse_tiles(table: object, origin: str) -> str | None:
     return kind
 
 
+def _parse_catalogue(table: object, origin: str) -> str | None:
+    """Validate the optional [catalogue] table: the files are rasters to be catalogued."""
+    if table is None:
+        return None
+    if not isinstance(table, dict):
+        msg = f"{origin}: [catalogue] must be a table"
+        raise SourceConfigError(msg)
+    _unknown_keys(table, CATALOGUE_KEYS, origin)
+    kind = _text(table, "kind", origin)
+    if kind not in CATALOGUE_KINDS:
+        msg = f"{origin}: catalogue.kind must be one of {sorted(CATALOGUE_KINDS)}, got {kind!r}"
+        raise SourceConfigError(msg)
+    return kind
+
+
 def parse(data: Mapping[str, Any], origin: str) -> SourceSpec:
     """Validate a parsed TOML document and turn it into a :class:`SourceSpec`."""
     _unknown_keys(data, TOP_LEVEL_KEYS, origin)
@@ -183,6 +202,7 @@ def parse(data: Mapping[str, Any], origin: str) -> SourceSpec:
 
     load_kind, load_themes = _parse_load(data.get("load"), origin)
     tiles_kind = _parse_tiles(data.get("tiles"), origin)
+    catalogue_kind = _parse_catalogue(data.get("catalogue"), origin)
 
     return SourceSpec(
         source_id=source_id,
@@ -200,6 +220,7 @@ def parse(data: Mapping[str, Any], origin: str) -> SourceSpec:
         load_themes=load_themes,
         probe=probe,
         tiles_kind=tiles_kind,
+        catalogue_kind=catalogue_kind,
     )
 
 

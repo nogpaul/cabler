@@ -11,3 +11,6 @@ url = "https://daten-hamburg.de/opendata/fernerkundung_hoehenmodelle/dgm/dgm1_hh
 allowed_hosts = ["daten-hamburg.de", "www.daten-hamburg.de"]
 max_bytes = 2_500_000_000
 format = "zip"
+
+[catalogue]
+kind = "geotiff"
