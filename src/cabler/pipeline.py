@@ -13,6 +13,10 @@ Usage: python -m cabler.pipeline list
        python -m cabler.pipeline validate {dev,staging,production} SOURCE ...
        python -m cabler.pipeline review {dev,staging,production} SOURCE
            [--suggestion S] [--limit N]
+       python -m cabler.pipeline core {dev,staging,production}
+       python -m cabler.pipeline queue {dev,staging,production} [--tier T] [--limit N]
+       python -m cabler.pipeline decide {dev,staging,production} SOURCE LAYER KEY DECISION
+           --reason TEXT --reviewer NAME
 """
 
 from __future__ import annotations
@@ -24,8 +28,22 @@ from typing import Any
 
 import psycopg
 
-from cabler import apply, checks, db, diff, fetch, load, remote, sources, terrain, tiles, validate
+from cabler import (
+    apply,
+    checks,
+    core,
+    db,
+    diff,
+    fetch,
+    load,
+    remote,
+    sources,
+    terrain,
+    tiles,
+    validate,
+)
 from cabler.apply import ApplyError
+from cabler.core import CoreError
 from cabler.diff import DiffError
 from cabler.envgen import NAMES
 from cabler.geotiff import GeoTiffError
@@ -291,6 +309,59 @@ def _run_review(env: str, spec: SourceSpec, suggestion: str | None, limit: int) 
     return 0
 
 
+def _run_core(env: str) -> int:
+    with db.connect("app", environ={"CABLER_ENV": env}) as conn:
+        try:
+            result = core.build_substations(conn)
+        except CoreError as exc:
+            print(f"ERROR core: {exc}", file=sys.stderr)
+            return 1
+    counts = result.counts
+    print(f"core build {result.build_id}  hash {result.content_hash[:16]}")
+    print(f"{'':<4}sources: {', '.join(f'{k} {v}' for k, v in result.source_versions.items())}")
+    print(
+        f"{'':<4}substations {counts['substations']:,}: strict {counts['strict']:,}, "
+        f"likely {counts['likely']:,}, inclusive {counts['inclusive']:,}"
+    )
+    tiers = ", ".join(f"{t} {counts[f'tier_{t}']:,}" for t in "ABCD")
+    print(f"{'':<4}review tiers: {tiers}; audit sample {counts['audit_sample']:,}")
+    return 0
+
+
+def _run_queue(env: str, tier: str | None, limit: int) -> int:
+    with db.connect("app", environ={"CABLER_ENV": env}) as conn:
+        rows = core.queue_rows(conn, tier, limit)
+    if not rows:
+        print("nothing to review (run: core, or every case has a decision)")
+        return 0
+    for source, layer, key, name, row_tier, impact, reach, hint, audit, lon, lat in rows:
+        mark = "audit" if audit else ""
+        print(
+            f"{row_tier or '-'} {source:<12} {layer:<13} {key:<12} {name:<24.24} "
+            f"impact {impact:<4} reach {reach:<4} {hint:<19} {mark:<5} {lon},{lat}"
+        )
+    return 0
+
+
+def _run_decide(env: str, args: argparse.Namespace) -> int:
+    with db.connect("app", environ={"CABLER_ENV": env}) as conn:
+        try:
+            decision_id = core.record_decision(
+                conn,
+                args.source,
+                args.layer,
+                args.key,
+                args.decision,
+                reason=args.reason,
+                reviewer=args.reviewer,
+            )
+        except CoreError as exc:
+            print(f"ERROR decide: {exc}", file=sys.stderr)
+            return 1
+    print(f"decision {decision_id}: {args.source}/{args.layer}/{args.key} -> {args.decision}")
+    return 0
+
+
 def _run_tiles(
     env: str, spec: SourceSpec, *, yes: bool, limit: int | None, workers: int, verify: bool = False
 ) -> int:
@@ -395,6 +466,20 @@ def main(argv: list[str] | None = None) -> int:
     catalogue_cmd = commands.add_parser("catalogue", help="catalogue the tiles of terrain sources")
     catalogue_cmd.add_argument("name", choices=NAMES)
     catalogue_cmd.add_argument("sources", nargs="+", help="source ids to catalogue")
+    core_cmd = commands.add_parser("core", help="build the core substations from validated data")
+    core_cmd.add_argument("name", choices=NAMES)
+    queue_cmd = commands.add_parser("queue", help="substations a person should look at")
+    queue_cmd.add_argument("name", choices=NAMES)
+    queue_cmd.add_argument("--tier", choices=list("ABCD"), help="only this tier")
+    queue_cmd.add_argument("--limit", type=int, default=20, help="rows to show")
+    decide_cmd = commands.add_parser("decide", help="record a decision about one substation")
+    decide_cmd.add_argument("name", choices=NAMES)
+    decide_cmd.add_argument("source", help="source id, for example osm_nrw")
+    decide_cmd.add_argument("layer", choices=["points", "lines", "multipolygons"])
+    decide_cmd.add_argument("key", help="OSM key, for example n123 or w456")
+    decide_cmd.add_argument("decision", choices=core.DECISIONS)
+    decide_cmd.add_argument("--reason", required=True, help="why, in one sentence")
+    decide_cmd.add_argument("--reviewer", required=True, help="who decides")
     args = parser.parse_args(argv)
 
     specs = sources.load_all()
@@ -439,6 +524,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.action == "review":
         (spec,) = _select(specs, [args.source])
         return _run_review(args.name, spec, args.suggestion, args.limit)
+
+    if args.action == "core":
+        return _run_core(args.name)
+
+    if args.action == "queue":
+        return _run_queue(args.name, args.tier, args.limit)
+
+    if args.action == "decide":
+        return _run_decide(args.name, args)
 
     with db.connect("app", environ={"CABLER_ENV": args.name}) as conn:
         for spec in specs.values():

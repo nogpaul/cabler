@@ -6,7 +6,7 @@ PY := .venv/bin/python
 ENV ?= dev
 
 .DEFAULT_GOAL := help
-.PHONY: help setup env db-up db-down db-psql db-reset migrate migrate-status sources register updates fetch load diff apply tiles catalogue validate review check test-int lock
+.PHONY: help setup env db-up db-down db-psql db-reset migrate migrate-status sources register updates fetch load diff apply tiles catalogue validate review core queue check test-int lock
 
 help: ## show this help
 > @grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
@@ -70,6 +70,12 @@ validate: ## judge applied snapshots, collect voltage hints: make validate SOURC
 
 review: ## substations without a tagged voltage, with evidence: make review SOURCES=osm_hamburg ($(ENV))
 > $(PY) -m cabler.pipeline review $(ENV) $(SOURCES) $(if $(SUGGESTION),--suggestion $(SUGGESTION),)
+
+core: ## build the core substations and their scenarios ($(ENV))
+> $(PY) -m cabler.pipeline core $(ENV)
+
+queue: ## substations a person should look at: make queue [TIER=A] [LIMIT=20] ($(ENV))
+> $(PY) -m cabler.pipeline queue $(ENV) $(if $(TIER),--tier $(TIER),) $(if $(LIMIT),--limit $(LIMIT),)
 
 check: ## lint, format check, type check, unit tests
 > .venv/bin/poe check
