@@ -247,7 +247,7 @@ def test_a_second_run_does_not_rewrite_unchanged_rows(tmp_path: Path) -> None:
         assert positions() == before
 
 
-def catalogue_zip(conn, tmp_path: Path, body: bytes) -> terrain.CatalogueResult:  # type: ignore[no-untyped-def]
+def fetch_zip(conn, tmp_path: Path, body: bytes) -> sources.SourceSpec:  # type: ignore[no-untyped-def]
     base = sources.load_all()["hamburg_dgm1"]
     spec = dataclasses.replace(base, source_id="itest_hh_terrain", max_bytes=1_000_000)
 
@@ -260,7 +260,11 @@ def catalogue_zip(conn, tmp_path: Path, body: bytes) -> terrain.CatalogueResult:
     client = remote.make_client(httpx.MockTransport(handle))
     sources.register(conn, spec)
     fetch.fetch_source(conn, client, spec, tmp_path)
-    return terrain.catalogue_source(conn, spec, tmp_path)
+    return spec
+
+
+def catalogue_zip(conn, tmp_path: Path, body: bytes) -> terrain.CatalogueResult:  # type: ignore[no-untyped-def]
+    return terrain.catalogue_source(conn, fetch_zip(conn, tmp_path, body), tmp_path)
 
 
 def test_the_same_tile_in_two_folders_of_a_zip_is_one_tile(tmp_path: Path) -> None:
@@ -299,3 +303,77 @@ def test_a_zip_inside_a_zip_that_unpacks_too_large_is_refused(
         pytest.raises(CatalogueError, match="unpacks to more than"),
     ):
         catalogue_zip(conn, tmp_path, body)
+
+
+def tile_file(conn, spec: sources.SourceSpec, raw: Path, tile_name: str) -> Path:  # type: ignore[no-untyped-def]
+    row = conn.execute(
+        "SELECT local_path FROM meta.tile"
+        " WHERE source_id = %s AND name = %s AND status = 'fetched'",
+        (spec.source_id, tile_name),
+    ).fetchone()
+    assert row is not None
+    return raw / str(row[0])
+
+
+def test_a_missing_file_and_a_file_of_another_size_are_reported(tmp_path: Path) -> None:
+    spec = tile_spec()
+    files = {name(x, 5652): tiff(x, 5652) for x in (280, 281, 282)}
+    with db.connect("app") as conn, conn.transaction(force_rollback=True):
+        fetched(conn, spec, tmp_path, files)
+        tile_file(conn, spec, tmp_path, name(281, 5652)).unlink()
+        shorter = tile_file(conn, spec, tmp_path, name(282, 5652))
+        shorter.unlink()  # a stored tile is read-only, so it is replaced, not written into
+        shorter.write_bytes(b"short")
+        result = terrain.catalogue_source(conn, spec, tmp_path)
+        assert result.tiles == 1
+        assert "No such file" in result.unreadable[name(281, 5652)]
+        assert "5 bytes" in result.unreadable[name(282, 5652)]
+
+
+def test_when_no_tile_can_be_read_the_refusal_says_why(tmp_path: Path) -> None:
+    spec = tile_spec()
+    files = {name(280, 5652): tiff(280, 5652), name(281, 5652): tiff(281, 5652)}
+    with db.connect("app") as conn, conn.transaction(force_rollback=True):
+        fetched(conn, spec, tmp_path, files)
+        for tile in files:
+            tile_file(conn, spec, tmp_path, tile).unlink()
+        with pytest.raises(CatalogueError, match=r"no tiles to catalogue.*all 2 could not be read"):
+            terrain.catalogue_source(conn, spec, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("status", "usable"),
+    [("fetched", True), ("loaded", True), ("failed", False), ("quarantined", False)],
+)
+def test_only_a_fetched_or_loaded_snapshot_is_catalogued(
+    tmp_path: Path, status: str, usable: bool
+) -> None:
+    body = zip_in_zip({"dgm1_32_548_5934_1_hh_2026.tif": tiff(548, 5934)})
+    with db.connect("app") as conn, conn.transaction(force_rollback=True):
+        spec = fetch_zip(conn, tmp_path, body)
+        conn.execute(
+            "UPDATE meta.source_version SET status = %s WHERE source_id = %s",
+            (status, spec.source_id),
+        )
+        if usable:
+            assert terrain.catalogue_source(conn, spec, tmp_path).tiles == 1
+        else:
+            with pytest.raises(CatalogueError, match="nothing was fetched"):
+                terrain.catalogue_source(conn, spec, tmp_path)
+
+
+def test_a_zip_member_with_an_unsafe_name_is_reported_with_a_printable_name(
+    tmp_path: Path,
+) -> None:
+    body = zip_in_zip(
+        {
+            "dgm1_32_548_5934_1_hh_2026.tif": tiff(548, 5934),
+            "x/bad name.tif": tiff(549, 5934),
+            "x/esc\x1b[31m.tif": tiff(550, 5934),
+        }
+    )
+    with db.connect("app") as conn, conn.transaction(force_rollback=True):
+        result = catalogue_zip(conn, tmp_path, body)
+        assert (result.tiles, result.new) == (1, 1)
+        assert sorted(result.unreadable) == ["'bad name.tif'", "'esc\\x1b[31m.tif'"]
+        assert all("not a plain file name" in why for why in result.unreadable.values())
