@@ -177,3 +177,12 @@ def test_a_member_that_unpacks_to_more_than_the_limit_is_refused(
     monkeypatch.setattr(ogr, "MAX_UNPACKED_BYTES", 10)
     with pytest.raises(OgrError, match="unpacks to more than"):
         list(ogr.features(archive, BY_ROW_UNPACKED))
+
+
+def test_a_member_that_is_read_directly_has_the_same_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive = make_zip(tmp_path, ROWS, "areas.gpkg")
+    monkeypatch.setattr(ogr, "MAX_UNPACKED_BYTES", 10)
+    with pytest.raises(OgrError, match="unpacks to more than"):
+        list(ogr.features(archive, BY_ROW))

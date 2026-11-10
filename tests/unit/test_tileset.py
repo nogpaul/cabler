@@ -132,3 +132,22 @@ def test_a_tile_path_that_leaves_the_raw_directory_is_refused(tmp_path: Path) ->
     listing = write_listing(raw, [entry])
     with pytest.raises(TileSetError, match="outside the raw directory"):
         tileset.verified_tiles(listing)
+
+
+def test_an_absolute_tile_path_is_refused(tmp_path: Path) -> None:
+    entry = tile_entry(tmp_path, "a.zip", b"data")
+    entry["path"] = str(tmp_path / "src" / "tiles" / "a.zip")
+    listing = write_listing(tmp_path, [entry])
+    with pytest.raises(TileSetError, match="outside the raw directory"):
+        tileset.verified_tiles(listing)
+
+
+def test_a_tile_that_is_a_link_to_another_disk_is_accepted(tmp_path: Path) -> None:
+    raw = tmp_path / "raw"
+    entry = tile_entry(raw, "a.zip", b"data")
+    stored = raw / "src" / "tiles" / "a.zip"
+    elsewhere = tmp_path / "elsewhere.zip"
+    stored.replace(elsewhere)
+    stored.symlink_to(elsewhere)
+    listing = write_listing(raw, [entry])
+    assert [t.name for t, _ in tileset.verified_tiles(listing)] == ["a.zip"]

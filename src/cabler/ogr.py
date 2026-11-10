@@ -145,12 +145,12 @@ def features(archive_path: Path, theme: Theme) -> Iterator[Feature]:
         raise OgrError(msg) from exc
     with archive:
         member = _member(archive.namelist(), theme.member)
-        if not theme.unpack:
-            yield from _features(f"/vsizip/{archive_path}/{member}", theme, batched=False)
-            return
         if archive.getinfo(member).file_size > MAX_UNPACKED_BYTES:
             msg = f"{member}: the member unpacks to more than {MAX_UNPACKED_BYTES:,} bytes"
             raise OgrError(msg)
+        if not theme.unpack:
+            yield from _features(f"/vsizip/{archive_path}/{member}", theme, batched=False)
+            return
         with tempfile.TemporaryDirectory(prefix="cabler-ogr-") as scratch:
             unpacked = Path(scratch) / Path(member).name
             with archive.open(member) as source, unpacked.open("wb") as target:
