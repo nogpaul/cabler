@@ -30,6 +30,7 @@ from cabler import tileset
 from cabler.features import Feature
 
 BATCH = 20_000
+MAX_UNPACKED_BYTES = 8 << 30  # a member that must be unpacked may not exceed this
 
 
 class OgrError(Exception):
@@ -147,6 +148,9 @@ def features(archive_path: Path, theme: Theme) -> Iterator[Feature]:
         if not theme.unpack:
             yield from _features(f"/vsizip/{archive_path}/{member}", theme, batched=False)
             return
+        if archive.getinfo(member).file_size > MAX_UNPACKED_BYTES:
+            msg = f"{member}: the member unpacks to more than {MAX_UNPACKED_BYTES:,} bytes"
+            raise OgrError(msg)
         with tempfile.TemporaryDirectory(prefix="cabler-ogr-") as scratch:
             unpacked = Path(scratch) / Path(member).name
             with archive.open(member) as source, unpacked.open("wb") as target:

@@ -26,6 +26,7 @@ from cabler.features import Feature
 
 SRS = {"urn:adv:crs:ETRS89_UTM32": 25832}
 ARC_TOLERANCE = 0.005  # metres between an arc and its straight segments
+MAX_PART_BYTES = 1 << 30  # one XML part may not unpack to more than this
 THEMES = {"parcel": "parcel_nas"}  # theme -> name under which the features are stored
 
 
@@ -65,9 +66,10 @@ def arc_points(
     p1: tuple[float, float], p2: tuple[float, float], p3: tuple[float, float]
 ) -> list[tuple[float, float]]:
     """Points along the circular arc p1 -> p2 -> p3, ending in p3 and not repeating p1."""
-    ax, ay = p1
-    bx, by = p2
-    cx, cy = p3
+    ox, oy = p1  # work relative to the first point: squares of UTM coordinates lose precision
+    ax, ay = 0.0, 0.0
+    bx, by = p2[0] - ox, p2[1] - oy
+    cx, cy = p3[0] - ox, p3[1] - oy
     d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
     if abs(d) < 1e-12:  # the three points are on a line: a straight segment
         return [p3]
@@ -89,8 +91,8 @@ def arc_points(
     pieces = max(1, math.ceil(abs(sweep) / max(step, 1e-6)))
     points = [
         (
-            ux + radius * math.cos(start + sweep * i / pieces),
-            uy + radius * math.sin(start + sweep * i / pieces),
+            ox + ux + radius * math.cos(start + sweep * i / pieces),
+            oy + uy + radius * math.sin(start + sweep * i / pieces),
         )
         for i in range(1, pieces)
     ]
@@ -151,10 +153,18 @@ def outline(position: Element, where: str) -> tuple[bytes, int]:
     if name not in SRS:
         msg = f"{where}: the coordinate system {name!r} is not known"
         raise NasError(msg)
-    patch = descend(surface, "patches", "PolygonPatch")
+    patches = descend(surface, "patches")
+    found = [p for p in patches if local(p.tag) == "PolygonPatch"] if patches is not None else []
+    if len(found) > 1:
+        msg = f"{where}: the surface has {len(found)} patches; only one is supported"
+        raise NasError(msg)
+    patch = found[0] if found else None
     exterior = descend(patch, "exterior", "Ring")
     if patch is None or exterior is None:
         msg = f"{where}: the surface has no outer ring"
+        raise NasError(msg)
+    if sum(local(item.tag) == "exterior" for item in patch) > 1:
+        msg = f"{where}: the patch has more than one exterior"
         raise NasError(msg)
     rings = [ring(exterior, where)]
     rings += [ring(item[0], where) for item in patch if local(item.tag) == "interior" and len(item)]
@@ -206,7 +216,12 @@ def parcel(element: Element) -> Feature | None:
 
 def parcels(data: bytes) -> Iterator[Feature]:
     """The parcels of one XML part. Each ``member`` is released as soon as it was read."""
-    for _, element in ElementTree.iterparse(io.BytesIO(data), events=("end",)):
+    stack: list[Element] = []
+    for event, element in ElementTree.iterparse(io.BytesIO(data), events=("start", "end")):
+        if event == "start":
+            stack.append(element)
+            continue
+        stack.pop()
         if local(element.tag) != "member":
             continue
         for item in element:
@@ -215,6 +230,8 @@ def parcels(data: bytes) -> Iterator[Feature]:
                 if feature is not None:
                     yield feature
         element.clear()
+        if stack:
+            stack[-1].remove(element)  # the cleared shell would stay attached to its parent
 
 
 def read_export(path: Path, themes: tuple[str, ...]) -> Iterator[Feature]:
@@ -235,6 +252,9 @@ def read_export(path: Path, themes: tuple[str, ...]) -> Iterator[Feature]:
             msg = f"{path} holds no XML part"
             raise NasError(msg)
         for part in parts:
+            if archive.getinfo(part).file_size > MAX_PART_BYTES:
+                msg = f"{part}: the part unpacks to more than {MAX_PART_BYTES:,} bytes"
+                raise NasError(msg)
             for feature in parcels(archive.read(part)):
                 if feature.key in seen:
                     msg = f"{part}: the parcel {feature.key} occurs twice"

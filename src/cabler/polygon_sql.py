@@ -110,17 +110,23 @@ WHERE c.version_id = %(version)s
   AND c.layer IN ({_KIND_LIST})
   AND c.change IN ('added', 'changed')
 """  # noqa: S608 (the fragments are constants of this module)
-PARCEL_CLOSE_SQL = """
+
+
+def _parcel_close_sql(layer: str) -> str:
+    return f"""
 UPDATE staging.parcel u
 SET valid_to_version_id = %(version)s
 FROM raw.feature_change c
 WHERE c.version_id = %(version)s
-  AND c.layer = 'parcel'
+  AND c.layer = '{layer}'
   AND c.change IN ('changed', 'removed')
   AND u.source_id = %(source)s
   AND u.feature_key = c.feature_key
   AND u.valid_to_version_id IS NULL
-"""
+"""  # noqa: S608 (the layer is a constant of this module)
+
+
+PARCEL_CLOSE_SQL = _parcel_close_sql("parcel")
 PARCEL_OPEN_SQL = f"""
 INSERT INTO staging.parcel
     (source_id, feature_key, valid_from_version_id, state_key, district, municipality,
@@ -136,7 +142,8 @@ SELECT %(source)s, f.feature_key, %(version)s, f.attributes ->> 'landschl',
        staging.parse_date(f.attributes ->> 'aktualit'),
        array_remove(ARRAY[
            {_GEOMETRY_FLAGS},
-           {_AREA_FLAG}
+           {_AREA_FLAG},
+           CASE WHEN official.v IS NULL THEN 'area_missing' END
        ], NULL),
        g.geom
 FROM raw.feature_change c
@@ -149,7 +156,7 @@ WHERE c.version_id = %(version)s
   AND c.layer = 'parcel'
   AND c.change IN ('added', 'changed')
 """  # noqa: S608 (the fragments are constants of this module)
-PARCEL_NAS_CLOSE_SQL = PARCEL_CLOSE_SQL.replace("'parcel'", "'parcel_nas'")
+PARCEL_NAS_CLOSE_SQL = _parcel_close_sql("parcel_nas")
 # Hamburg's NAS export names things differently and has codes where NRW has names.
 PARCEL_NAS_OPEN_SQL = f"""
 INSERT INTO staging.parcel
@@ -163,7 +170,8 @@ SELECT %(source)s, f.feature_key, %(version)s, f.attributes ->> 'land', f.attrib
        staging.parse_date(f.attributes ->> 'beginnt'),
        array_remove(ARRAY[
            {_GEOMETRY_FLAGS},
-           {_AREA_FLAG}
+           {_AREA_FLAG},
+           CASE WHEN official.v IS NULL THEN 'area_missing' END
        ], NULL),
        g.geom
 FROM raw.feature_change c
