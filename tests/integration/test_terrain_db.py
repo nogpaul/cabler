@@ -148,7 +148,7 @@ def test_duplicates_overlaps_and_unusual_tiles_are_reported(tmp_path: Path) -> N
         fetched(conn, spec, tmp_path, files)
         result = terrain.catalogue_source(conn, spec, tmp_path)
         assert result.duplicate_corners == 1
-        assert result.overlaps == 2
+        assert result.overlaps == 3  # the two at one corner and each of them with the third
         assert result.flags == {
             "crs_unexpected": 1,
             "name_extent_mismatch": 1,
@@ -201,3 +201,101 @@ def test_a_source_that_is_not_catalogued_or_has_no_tiles_is_refused(tmp_path: Pa
         sources.register(conn, empty)
         with pytest.raises(CatalogueError, match="no tiles"):
             terrain.catalogue_source(conn, empty, tmp_path)
+
+
+def test_a_tile_inside_another_counts_as_an_overlap(tmp_path: Path) -> None:
+    spec = tile_spec()
+    files = {
+        name(280, 5652): tiff(280, 5652),
+        name(280, 5652, 2023): tiff(280.25, 5652.25, pixel=0.5),  # 500 m, entirely inside
+    }
+    with db.connect("app") as conn, conn.transaction(force_rollback=True):
+        fetched(conn, spec, tmp_path, files)
+        result = terrain.catalogue_source(conn, spec, tmp_path)
+        assert (result.overlaps, result.duplicate_corners) == (1, 0)
+
+
+def test_a_tile_that_cannot_be_read_is_reported_and_the_others_are_catalogued(
+    tmp_path: Path,
+) -> None:
+    spec = tile_spec()
+    files = {name(280, 5652): tiff(280, 5652), name(281, 5652): b"this is not a tiff file"}
+    with db.connect("app") as conn, conn.transaction(force_rollback=True):
+        fetched(conn, spec, tmp_path, files)
+        result = terrain.catalogue_source(conn, spec, tmp_path)
+        assert (result.tiles, result.new) == (1, 1)
+        assert list(result.unreadable) == [name(281, 5652)]
+        assert "not a TIFF" in result.unreadable[name(281, 5652)]
+
+
+def test_a_second_run_does_not_rewrite_unchanged_rows(tmp_path: Path) -> None:
+    spec = tile_spec()
+    files = {name(280, 5652): tiff(280, 5652), name(281, 5652): tiff(281, 5652)}
+    with db.connect("app") as conn, conn.transaction(force_rollback=True):
+        fetched(conn, spec, tmp_path, files)
+        terrain.catalogue_source(conn, spec, tmp_path)
+
+        def positions() -> list[str]:
+            rows = conn.execute(
+                "SELECT ctid::text FROM staging.terrain_tile WHERE source_id = %s ORDER BY name",
+                (spec.source_id,),
+            ).fetchall()
+            return [str(r[0]) for r in rows]
+
+        before = positions()
+        terrain.catalogue_source(conn, spec, tmp_path)
+        assert positions() == before
+
+
+def catalogue_zip(conn, tmp_path: Path, body: bytes) -> terrain.CatalogueResult:  # type: ignore[no-untyped-def]
+    base = sources.load_all()["hamburg_dgm1"]
+    spec = dataclasses.replace(base, source_id="itest_hh_terrain", max_bytes=1_000_000)
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        headers = {"ETag": '"x"', "Content-Length": str(len(body))}
+        if request.method == "HEAD":
+            return httpx.Response(200, headers=headers)
+        return httpx.Response(200, headers=headers, stream=httpx.ByteStream(body))
+
+    client = remote.make_client(httpx.MockTransport(handle))
+    sources.register(conn, spec)
+    fetch.fetch_source(conn, client, spec, tmp_path)
+    return terrain.catalogue_source(conn, spec, tmp_path)
+
+
+def test_the_same_tile_in_two_folders_of_a_zip_is_one_tile(tmp_path: Path) -> None:
+    data = tiff(548, 5934)
+    body = zip_in_zip(
+        {"a/dgm1_32_548_5934_1_hh_2026.tif": data, "b/dgm1_32_548_5934_1_hh_2026.tif": data}
+    )
+    with db.connect("app") as conn, conn.transaction(force_rollback=True):
+        result = catalogue_zip(conn, tmp_path, body)
+        assert (result.tiles, result.new) == (1, 1)
+
+
+def test_two_different_tiles_with_one_name_in_a_zip_are_refused(tmp_path: Path) -> None:
+    body = zip_in_zip(
+        {
+            "a/dgm1_32_548_5934_1_hh_2026.tif": tiff(548, 5934),
+            "b/dgm1_32_548_5934_1_hh_2026.tif": tiff(549, 5934),
+        }
+    )
+    with (
+        db.connect("app") as conn,
+        conn.transaction(force_rollback=True),
+        pytest.raises(CatalogueError, match="occurs twice"),
+    ):
+        catalogue_zip(conn, tmp_path, body)
+
+
+def test_a_zip_inside_a_zip_that_unpacks_too_large_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(terrain, "MAX_INNER_ZIP_BYTES", 10)
+    body = zip_in_zip({"dgm1_32_548_5934_1_hh_2026.tif": tiff(548, 5934)})
+    with (
+        db.connect("app") as conn,
+        conn.transaction(force_rollback=True),
+        pytest.raises(CatalogueError, match="unpacks to more than"),
+    ):
+        catalogue_zip(conn, tmp_path, body)

@@ -261,6 +261,11 @@ def _run_catalogue(env: str, selected: list[SourceSpec]) -> int:
                 f"{'':<29}set: {result.duplicate_corners} duplicate corners, "
                 f"{result.overlaps} overlaps, {result.holes} holes ({result.hole_km2} km2)"
             )
+            if result.unreadable:
+                failures += 1
+                print(f"{'':<29}unreadable: {len(result.unreadable):,} tiles (not catalogued)")
+                for tile, reason in list(result.unreadable.items())[:10]:
+                    print(f"{'':<31}{tile}: {reason}")
     return 1 if failures else 0
 
 

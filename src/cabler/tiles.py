@@ -243,6 +243,14 @@ def _download_one(
     raise last
 
 
+def _target(tiles_dir: Path, name: str) -> Path:
+    """Where a tile is stored. The name is checked again here, with the rule of the index."""
+    if not is_safe_name(name):
+        msg = f"{name}: not a plain file name; the tile would not stay in its folder"
+        raise TilesError(msg)
+    return tiles_dir / name
+
+
 def _store(
     conn: psycopg.Connection[Any],
     spec: SourceSpec,
@@ -254,11 +262,7 @@ def _store(
     """Move a verified tile into place and record it, keeping any older file."""
     tiles_dir = raw / spec.source_id / "tiles"
     tiles_dir.mkdir(parents=True, exist_ok=True)
-    target = tiles_dir / entry.name
-    if Path(os.path.normpath(target)).parent != Path(os.path.normpath(tiles_dir)):
-        # the folder as written, not as resolved; parse_index refuses such names already
-        msg = f"{entry.name}: the tile would be stored outside its folder"
-        raise TilesError(msg)
+    target = _target(tiles_dir, entry.name)
     if old is not None and target.exists():
         keep = tiles_dir / "superseded"
         keep.mkdir(exist_ok=True)

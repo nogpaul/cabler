@@ -85,3 +85,9 @@ def test_a_zip_without_tiles_must_hold_exactly_one_zip(tmp_path: Path) -> None:
     none = make_zip(tmp_path / "none.zip", {"readme.csv": b"c"})
     with zipfile.ZipFile(none) as archive, pytest.raises(CatalogueError, match="0 zips"):
         terrain.inner_zip(archive, "none.zip")
+
+
+def test_floating_point_noise_in_a_corner_is_not_a_finding() -> None:
+    noisy = info(origin_x=280000.0000001, origin_y=5653000.0000002)
+    assert terrain.findings(NAME, noisy) == []
+    assert terrain.findings("tile.tif", noisy) == []

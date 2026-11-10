@@ -18,6 +18,7 @@ import struct
 import zipfile
 from collections.abc import Iterator
 from pathlib import Path
+from typing import IO
 from xml.etree.ElementTree import Element
 
 from defusedxml import ElementTree
@@ -214,10 +215,11 @@ def parcel(element: Element) -> Feature | None:
     return Feature(THEMES["parcel"], key, attributes, wkb, srid)
 
 
-def parcels(data: bytes) -> Iterator[Feature]:
+def parcels(source: bytes | IO[bytes]) -> Iterator[Feature]:
     """The parcels of one XML part. Each ``member`` is released as soon as it was read."""
+    handle = io.BytesIO(source) if isinstance(source, bytes) else source
     stack: list[Element] = []
-    for event, element in ElementTree.iterparse(io.BytesIO(data), events=("start", "end")):
+    for event, element in ElementTree.iterparse(handle, events=("start", "end")):
         if event == "start":
             stack.append(element)
             continue
@@ -255,9 +257,10 @@ def read_export(path: Path, themes: tuple[str, ...]) -> Iterator[Feature]:
             if archive.getinfo(part).file_size > MAX_PART_BYTES:
                 msg = f"{part}: the part unpacks to more than {MAX_PART_BYTES:,} bytes"
                 raise NasError(msg)
-            for feature in parcels(archive.read(part)):
-                if feature.key in seen:
-                    msg = f"{part}: the parcel {feature.key} occurs twice"
-                    raise NasError(msg)
-                seen.add(feature.key)
-                yield feature
+            with archive.open(part) as handle:
+                for feature in parcels(handle):
+                    if feature.key in seen:
+                        msg = f"{part}: the parcel {feature.key} occurs twice"
+                        raise NasError(msg)
+                    seen.add(feature.key)
+                    yield feature

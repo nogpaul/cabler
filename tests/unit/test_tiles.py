@@ -196,3 +196,19 @@ format = "tif"
     path.write_text('tiles = "yes"\n' + text, encoding="utf-8")
     with pytest.raises(SourceConfigError, match=r"\[tiles\] must be a table"):
         sources.load_source(path)
+
+
+@pytest.mark.parametrize("name", ["../x.tif", "sub/a.tif", ".hidden", "a b.tif"])
+def test_the_store_checks_a_name_again_with_the_rule_of_the_index(
+    tmp_path: Path, name: str
+) -> None:
+    with pytest.raises(TilesError, match="plain file name"):
+        tiles._target(tmp_path, name)
+
+
+def test_a_tiles_folder_that_is_a_link_to_another_disk_is_accepted(tmp_path: Path) -> None:
+    elsewhere = tmp_path / "other_disk"
+    elsewhere.mkdir()
+    folder = tmp_path / "tiles"
+    folder.symlink_to(elsewhere)
+    assert tiles._target(folder, "a.tif") == folder / "a.tif"
