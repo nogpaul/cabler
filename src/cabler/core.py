@@ -16,9 +16,12 @@ calling it high voltage would change that unit's nearest substation (a straight-
 "would change a route"). Every undecided substation without a voltage tag gets a tier: **D** no
 impact, so no decision about it can change a route; otherwise by evidence **A** the hints conflict
 or point to high voltage, **B** the hints agree it is not high voltage, **C** no evidence. The
-review queue lists A and C, most impact first. A stratified sample of the substations with hints,
-drawn by a fixed hash, is marked for audit: the people who check it give true labels, which is how
-the precision of the rules is measured without bias.
+review queue lists A and C, most impact first.
+
+The audit sample is a stratified sample of the untagged substations that have a hint and a wind
+unit within reach, drawn by a fixed hash and marked. Nothing a person decides moves it (not the
+tier, not a decision), so the people who check it label a fixed group, and that is how the
+precision of the rules is measured without bias.
 
 The core is rebuildable: a build is a function of the staging tables, the decisions and the rule
 set, and its content hash leaves out every database-generated number, so a rebuild from the raw
@@ -177,10 +180,14 @@ class Row:
 
 
 def audit_sample(rows: list[Row], rules: RuleSet) -> set[tuple[str, str, str]]:
-    """Keys of the substations drawn for audit: per source and hint, the first by a fixed hash."""
+    """Keys of the substations drawn for audit: per source and hint, the first by a fixed hash.
+
+    Eligible are the untagged substations that have a hint and a wind unit within reach. Neither
+    the tier nor a decision takes part, so recording a decision does not move the sample.
+    """
     strata: dict[tuple[str, str], list[Row]] = {}
     for row in rows:
-        eligible = row.tier in ("A", "B", "C") and row.hint in AUDIT_HINTS
+        eligible = row.voltage_v is None and row.in_reach > 0 and row.hint in AUDIT_HINTS
         if eligible:
             strata.setdefault((row.source_id, str(row.hint)), []).append(row)
 
@@ -245,11 +252,11 @@ CROSS JOIN LATERAL (
 ) r
 ORDER BY s.layer, s.osm_key
 """
+# The newest version that opened or closed a unit, so that retiring units changes it too.
 WIND_VERSION_SQL = """
-SELECT coalesce(max(valid_from_version_id), 0) FROM staging.wind_unit_current
-WHERE state_key = ANY(%s)
+SELECT coalesce(max(greatest(valid_from_version_id, coalesce(valid_to_version_id, 0))), 0)
+FROM staging.wind_unit WHERE state_key = ANY(%s)
 """
-DECISIONS_SQL = "SELECT coalesce(max(decision_id), 0) FROM core.review_decision"
 BUILD_SQL = """
 INSERT INTO core.build (rule_set_id, source_versions, decisions_through, counts, content_hash)
 VALUES (%s, %s::jsonb, %s, %s::jsonb, %s) RETURNING build_id
@@ -333,14 +340,6 @@ class BuildResult:
     counts: dict[str, int]
     source_versions: dict[str, int]
 
-    def to_json(self) -> dict[str, Any]:
-        return {
-            "build_id": self.build_id,
-            "content_hash": self.content_hash,
-            "counts": self.counts,
-            "source_versions": self.source_versions,
-        }
-
 
 def _counts(rows: list[Row]) -> dict[str, int]:
     counts = {
@@ -353,6 +352,34 @@ def _counts(rows: list[Row]) -> dict[str, int]:
     for tier in ("A", "B", "C", "D"):
         counts[f"tier_{tier}"] = sum(r.tier == tier for r in rows)
     return counts
+
+
+def _insert_values(build_id: int, r: Row) -> tuple[Any, ...]:
+    c = r.classification
+    return (
+        build_id,
+        r.source_id,
+        r.layer,
+        r.osm_key,
+        r.feature_id,
+        r.name,
+        r.operator,
+        r.substation_type,
+        r.voltage_v,
+        c.voltage_source,
+        r.hint,
+        r.decision,
+        r.decision_id,
+        c.in_strict,
+        c.in_likely,
+        c.in_inclusive,
+        c.reason,
+        r.tier,
+        r.in_reach,
+        r.impact,
+        r.audit_sample,
+        r.location_ewkb,
+    )
 
 
 def build_substations(conn: psycopg.Connection[Any], rules: RuleSet = DEFAULT_RULES) -> BuildResult:
@@ -372,11 +399,11 @@ def build_substations(conn: psycopg.Connection[Any], rules: RuleSet = DEFAULT_RU
                 msg = f"{source_id}: the newest snapshot ({verdict[0]}) was quarantined"
                 raise CoreError(msg)
             versions[source_id] = int(verdict[0])
-        newest_decision = conn.execute(DECISIONS_SQL).fetchone()
-        decisions_through = int(newest_decision[0]) if newest_decision else 0
         rows: list[Row] = []
         for source_id in sorted(rules.states):
             rows += _facts(conn, rules, source_id, rules.states[source_id], versions[source_id])
+        # the newest decision that this build applied, read from the same rows it used
+        decisions_through = max((r.decision_id or 0 for r in rows), default=0)
         chosen = audit_sample(rows, rules)
         rows = [replace(r, audit_sample=(r.source_id, r.layer, r.osm_key) in chosen) for r in rows]
         wind_version = conn.execute(WIND_VERSION_SQL, (sorted(rules.states.values()),)).fetchone()
@@ -388,36 +415,8 @@ def build_substations(conn: psycopg.Connection[Any], rules: RuleSet = DEFAULT_RU
             (rule_set_id, json.dumps(versions), decisions_through, json.dumps(counts), digest),
         ).fetchone()
         build_id = _returned_id(built)
-        conn.cursor().executemany(
-            INSERT_SQL,
-            [
-                (
-                    build_id,
-                    r.source_id,
-                    r.layer,
-                    r.osm_key,
-                    r.feature_id,
-                    r.name,
-                    r.operator,
-                    r.substation_type,
-                    r.voltage_v,
-                    r.classification.voltage_source,
-                    r.hint,
-                    r.decision,
-                    r.decision_id,
-                    r.classification.in_strict,
-                    r.classification.in_likely,
-                    r.classification.in_inclusive,
-                    r.classification.reason,
-                    r.tier,
-                    r.in_reach,
-                    r.impact,
-                    r.audit_sample,
-                    r.location_ewkb,
-                )
-                for r in rows
-            ],
-        )
+        with conn.cursor() as cursor:
+            cursor.executemany(INSERT_SQL, [_insert_values(build_id, r) for r in rows])
     return BuildResult(build_id, digest, counts, versions)
 
 
@@ -456,25 +455,31 @@ def record_decision(
     if not reason.strip() or not reviewer.strip():
         msg = "a decision needs a reason and a reviewer"
         raise CoreError(msg)
-    with conn.transaction():
-        if conn.execute(SUBJECT_SQL, (source_id, layer, osm_key)).fetchone() is None:
-            msg = f"{source_id}/{layer}/{osm_key} is not a current substation"
-            raise CoreError(msg)
-        newest = conn.execute(NEWEST_SQL, (source_id, layer, osm_key)).fetchone()
-        created = conn.execute(
-            DECIDE_SQL,
-            (
-                source_id,
-                layer,
-                osm_key,
-                decision,
-                reason,
-                reviewer,
-                json.dumps(evidence or {}),
-                register_rules(conn, rules),
-                newest[0] if newest else None,
-            ),
-        ).fetchone()
+    try:
+        with conn.transaction():
+            if conn.execute(SUBJECT_SQL, (source_id, layer, osm_key)).fetchone() is None:
+                msg = f"{source_id}/{layer}/{osm_key} is not a current substation"
+                raise CoreError(msg)
+            newest = conn.execute(NEWEST_SQL, (source_id, layer, osm_key)).fetchone()
+            created = conn.execute(
+                DECIDE_SQL,
+                (
+                    source_id,
+                    layer,
+                    osm_key,
+                    decision,
+                    reason,
+                    reviewer,
+                    json.dumps(evidence or {}),
+                    register_rules(conn, rules),
+                    newest[0] if newest else None,
+                ),
+            ).fetchone()
+    except psycopg.errors.CheckViolation as exc:
+        if "must replace the newest" not in str(exc):
+            raise
+        msg = f"another decision about {source_id}/{layer}/{osm_key} was recorded first; look again"
+        raise CoreError(msg) from exc
     return _returned_id(created)
 
 

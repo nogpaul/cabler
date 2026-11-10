@@ -97,6 +97,20 @@ def test_the_queue_lists_the_cases_with_their_impact(
     assert "C osm_nrw" in out
 
 
+def test_text_from_a_file_is_shown_with_its_control_characters_escaped(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    name = "Werk M\u00fcller \x1b[2J\x07"
+    rows = [("osm_nrw", "points", "n1", name, "A", 3, 4, "conflict", False, 7.1, 51.2)]
+    monkeypatch.setattr(pipeline.core, "queue_rows", lambda conn, tier, limit: rows)
+    code, out, _ = run(["queue", "dev"], capsys)
+    assert code == 0
+    assert "\x1b" not in out
+    assert "\x07" not in out
+    assert "M\u00fcller" in out
+    assert "\\x1b[2J" in out
+
+
 def test_an_empty_queue_says_what_that_means(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -104,6 +118,13 @@ def test_an_empty_queue_says_what_that_means(
     code, out, _ = run(["queue", "dev"], capsys)
     assert code == 0
     assert "nothing to review" in out
+
+
+def test_visible_escapes_what_a_terminal_would_obey() -> None:
+    assert pipeline._visible("plain \u00e4\u00f6\u00fc") == "plain \u00e4\u00f6\u00fc"
+    assert pipeline._visible("a\x1b]0;x\x07b") == "a\\x1b]0;x\\x07b"
+    assert pipeline._visible("a\u202eb") == "a\\u202eb"
+    assert pipeline._visible(None) == "None"
 
 
 def test_a_decision_is_recorded_with_its_reason_and_reviewer(

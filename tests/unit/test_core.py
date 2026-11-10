@@ -108,6 +108,9 @@ def make_row(
     feature_id: int = 1,
     decision_id: int | None = None,
     flag: bool = False,
+    in_reach: int = 1,
+    voltage_v: int | None = None,
+    decision: str | None = None,
 ) -> Row:
     return Row(
         feature_id=feature_id,
@@ -117,13 +120,13 @@ def make_row(
         name=None,
         operator=None,
         substation_type=None,
-        voltage_v=None,
+        voltage_v=voltage_v,
         hint=hint,
-        decision=None,
+        decision=decision,
         decision_id=decision_id,
         classification=core.classify(None, None, hint, HIGH),
         tier=tier,
-        in_reach=1,
+        in_reach=in_reach,
         impact=0,
         audit_sample=flag,
         location_ewkb=b"x",
@@ -150,19 +153,34 @@ def test_the_audit_sample_is_the_same_every_time_and_depends_on_the_seed() -> No
     assert first != core.audit_sample(members, replace(rules, audit_seed="another-seed"))
 
 
-def test_only_hinted_substations_in_reach_are_audited_one_sample_per_stratum() -> None:
+def test_only_untagged_hinted_substations_in_reach_are_audited_one_per_stratum() -> None:
     rules = RuleSet(version="1.0.0", audit_min=1, audit_share=0.0)
     members = [
         *rows(3, "a", hint="hv_candidate", tier="A"),
         *rows(3, "b", hint="conflict", tier="A"),
         *rows(3, "c", hint="likely_low_voltage", tier="B", source="osm_hamburg"),
         *rows(3, "d", hint="no_evidence", tier="C"),  # no rule made a claim: nothing to audit
-        *rows(3, "e", hint="hv_candidate", tier="D"),  # out of reach
-        *rows(3, "f", hint=None, tier=None),  # settled by a tag
+        *rows(3, "e", hint="hv_candidate", tier="D", in_reach=0),  # no wind unit near
+        *rows(3, "f", hint="hv_candidate", tier=None, voltage_v=110_000),  # a tag
+        *rows(3, "g", hint=None, tier="C"),  # no hint
     ]
     chosen = core.audit_sample(members, rules)
     assert len(chosen) == 3  # one per stratum: hv_candidate, conflict, hamburg likely_low_voltage
     assert {source for source, _, _ in chosen} == {"osm_nrw", "osm_hamburg"}
+
+
+def test_the_audit_sample_does_not_move_when_decisions_are_recorded() -> None:
+    rules = RuleSet(version="1.0.0", audit_min=5)
+    before = rows(200, "n", hint="conflict", tier="A")
+    sample = core.audit_sample(before, rules)
+    assert sample
+    after = [
+        replace(r, decision="not_high_voltage", decision_id=7, tier=None)
+        if (r.source_id, r.layer, r.osm_key) in sample
+        else replace(r, tier="D", impact=0)  # a decision elsewhere took its impact
+        for r in before
+    ]
+    assert core.audit_sample(after, rules) == sample
 
 
 def test_the_content_hash_ignores_database_numbers_and_row_order() -> None:

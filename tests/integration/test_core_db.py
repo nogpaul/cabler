@@ -115,7 +115,7 @@ def test_a_build_puts_every_substation_into_its_scenarios_and_tier(tmp_path: Pat
             "strict": 1,
             "likely": 3,
             "inclusive": 6,
-            "audit_sample": 2,
+            "audit_sample": 3,
             "tier_A": 3,
             "tier_B": 0,
             "tier_C": 1,
@@ -133,8 +133,9 @@ def test_a_build_puts_every_substation_into_its_scenarios_and_tier(tmp_path: Pat
         audited = conn.execute(
             "SELECT osm_key FROM core.substation_current WHERE audit_sample ORDER BY osm_key"
         ).fetchall()
-        assert ("n102",) in audited
-        assert len(audited) == 2
+        assert ("n102",) in audited  # the only one of its stratum
+        assert ("n103",) in audited  # no impact, but in reach: still audited
+        assert len(audited) == 3
 
 
 def test_the_same_inputs_give_the_same_hash_and_the_build_is_recorded(tmp_path: Path) -> None:
@@ -149,8 +150,7 @@ def test_the_same_inputs_give_the_same_hash_and_the_build_is_recorded(tmp_path: 
             " FROM core.build WHERE build_id = %s",
             (second.build_id,),
         ).fetchone()
-        newest = conn.execute("SELECT coalesce(max(decision_id), 0) FROM core.review_decision")
-        assert row == ({"itest_source": version, "wind_units": version}, newest.fetchone()[0], "6")  # type: ignore[index]
+        assert row == ({"itest_source": version, "wind_units": version}, 0, "6")
         ours = [first.build_id, second.build_id]
         assert conn.execute(
             "SELECT count(DISTINCT build_id) FROM core.substation WHERE build_id = ANY(%s)", (ours,)
@@ -162,7 +162,8 @@ def test_the_queue_lists_the_decision_relevant_cases_first(tmp_path: Path) -> No
         prepared(conn, tmp_path)
         core.build_substations(conn, RULES)
         keys = [row[2] for row in core.queue_rows(conn, None, 10)]
-        assert keys == ["n101", "n102", "n104", "n105"]
+        # the audit sample is in the queue too, after the cases that matter
+        assert keys == ["n101", "n102", "n104", "n105", "n103"]
         assert [row[2] for row in core.queue_rows(conn, "A", 10)] == ["n101", "n102", "n104"]
         assert [row[2] for row in core.queue_rows(conn, None, 2)] == ["n101", "n102"]
 
@@ -181,7 +182,8 @@ def test_a_decision_changes_the_next_build_and_leaves_the_queue(tmp_path: Path) 
             reviewer="reviewer-1",
             rules=RULES,
         )
-        assert [row[2] for row in core.queue_rows(conn, None, 10)] == ["n102", "n104", "n105"]
+        left = ["n102", "n104", "n105", "n103"]
+        assert [row[2] for row in core.queue_rows(conn, None, 10)] == left
         second = core.record_decision(
             conn,
             spec.source_id,
@@ -211,6 +213,46 @@ def test_a_decision_changes_the_next_build_and_leaves_the_queue(tmp_path: Path) 
             "SELECT decision, decision_id FROM core.substation_current WHERE osm_key = 'n101'"
         ).fetchone()
         assert decided == ("high_voltage", second)
+        through = conn.execute(
+            "SELECT decisions_through FROM core.build WHERE build_id = %s", (result.build_id,)
+        ).fetchone()
+        assert through == (second,)
+
+
+def test_a_decision_does_not_move_the_audit_sample(tmp_path: Path) -> None:
+    with db.connect("app") as conn, conn.transaction(force_rollback=True):
+        spec, _ = prepared(conn, tmp_path)
+        audited = "SELECT osm_key FROM core.substation_current WHERE audit_sample ORDER BY osm_key"
+        core.build_substations(conn, RULES)
+        before = conn.execute(audited).fetchall()
+        assert ("n102",) in before
+        core.record_decision(
+            conn,
+            spec.source_id,
+            "points",
+            "n102",
+            "not_high_voltage",
+            reason="a small station",
+            reviewer="p",
+            rules=RULES,
+        )
+        core.build_substations(conn, RULES)
+        assert conn.execute(audited).fetchall() == before
+
+
+def test_the_wind_unit_version_changes_when_units_are_retired(tmp_path: Path) -> None:
+    with db.connect("app") as conn, conn.transaction(force_rollback=True):
+        publisher = Publisher()
+        spec, version = prepared(conn, tmp_path, publisher)
+        assert conn.execute(core.WIND_VERSION_SQL, (["99"],)).fetchone() == (version,)
+        publisher.release("power_hints_cut.osm", '"r2"')
+        later = ingest(conn, publisher, spec, tmp_path)
+        conn.execute(
+            "UPDATE staging.wind_unit SET valid_to_version_id = %s"
+            " WHERE source_id = %s AND unit_key = 'w1'",
+            (later, spec.source_id),
+        )
+        assert conn.execute(core.WIND_VERSION_SQL, (["99"],)).fetchone() == (later,)
 
 
 def test_a_decision_about_something_else_or_without_a_reason_is_refused(tmp_path: Path) -> None:
@@ -301,6 +343,20 @@ def test_a_decision_must_replace_the_newest_one(tmp_path: Path) -> None:
         with refused(), conn.transaction():
             conn.execute(insert, (spec.source_id, rule_set_id, None))
         conn.execute(insert, (spec.source_id, rule_set_id, first[0]))
+
+
+def test_a_decision_that_loses_the_race_is_refused_with_a_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with db.connect("app") as conn, conn.transaction(force_rollback=True):
+        spec, _ = prepared(conn, tmp_path)
+        args = (conn, spec.source_id, "points", "n101")
+        core.record_decision(*args, "high_voltage", reason="r", reviewer="p", rules=RULES)
+        # what a second reviewer sees when the first one decides between the read and the insert
+        stale = "SELECT NULL::bigint WHERE %s <> '' AND %s <> '' AND %s <> ''"
+        monkeypatch.setattr(core, "NEWEST_SQL", stale)
+        with pytest.raises(CoreError, match="recorded first"):
+            core.record_decision(*args, "not_high_voltage", reason="r", reviewer="q", rules=RULES)
 
 
 def test_a_rebuild_from_the_raw_data_gives_the_same_content_hash(tmp_path: Path) -> None:

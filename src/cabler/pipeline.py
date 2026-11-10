@@ -287,6 +287,11 @@ def _run_catalogue(env: str, selected: list[SourceSpec]) -> int:
     return 1 if failures else 0
 
 
+def _visible(text: object) -> str:
+    """Text from a downloaded file with its control characters written out, never sent raw."""
+    return "".join(c if c.isprintable() else ascii(c)[1:-1] for c in str(text))
+
+
 def _run_review(env: str, spec: SourceSpec, suggestion: str | None, limit: int) -> int:
     with db.connect("app", environ={"CABLER_ENV": env}) as conn:
         counts = validate.review_counts(conn, spec.source_id)
@@ -301,9 +306,9 @@ def _run_review(env: str, spec: SourceSpec, suggestion: str | None, limit: int) 
             if line_v is not None:
                 evidence.append(f"line {line_v:,} V at {line_d} m")
             if type_hint:
-                evidence.append(f"type {subtype or '-'} -> {type_hint}")
+                evidence.append(f"type {_visible(subtype or '-')} -> {type_hint}")
             print(
-                f"  {key:<14} {kind:<18} {name or operator or '-':<28.28} "
+                f"  {_visible(key):<14} {kind:<18} {_visible(name or operator or '-'):<28.28} "
                 f"{'; '.join(evidence) or 'no evidence':<44} {lon},{lat}"
             )
     return 0
@@ -337,8 +342,9 @@ def _run_queue(env: str, tier: str | None, limit: int) -> int:
     for source, layer, key, name, row_tier, impact, reach, hint, audit, lon, lat in rows:
         mark = "audit" if audit else ""
         print(
-            f"{row_tier or '-'} {source:<12} {layer:<13} {key:<12} {name:<24.24} "
-            f"impact {impact:<4} reach {reach:<4} {hint:<19} {mark:<5} {lon},{lat}"
+            f"{row_tier or '-'} {_visible(source):<12} {layer:<13} {_visible(key):<12} "
+            f"{_visible(name):<24.24} impact {impact:<4} reach {reach:<4} "
+            f"{_visible(hint):<19} {mark:<5} {lon},{lat}"
         )
     return 0
 
