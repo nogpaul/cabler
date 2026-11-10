@@ -8,10 +8,11 @@ from typing import Any
 
 import pytest
 
-from cabler import apply, diff, load, pipeline, validate
+from cabler import apply, diff, load, pipeline, terrain, validate
 from cabler.apply import ApplyError
 from cabler.diff import DiffError
 from cabler.load import LoadError
+from cabler.terrain import CatalogueError
 from cabler.validate import ValidateError
 
 Run = tuple[int, str, str]
@@ -290,3 +291,53 @@ def test_review_passes_the_suggestion_filter_on(
     monkeypatch.setattr(pipeline.validate, "review_rows", rows)
     run(["review", "dev", "osm_hamburg", "--suggestion", "conflict"], capsys)
     assert seen == [("conflict", 20)]
+
+
+def catalogue_result(unreadable: dict[str, str] | None = None) -> terrain.CatalogueResult:
+    return terrain.CatalogueResult(
+        source_id="nrw_dgm1",
+        tiles=35860,
+        new=12,
+        flags={"off_grid": 2},
+        duplicate_corners=0,
+        overlaps=0,
+        holes=1,
+        hole_km2=1.0,
+        extent=(280000.0, 5652000.0, 282000.0, 5653000.0),
+        area_km2=35860.0,
+        unreadable=unreadable or {},
+    )
+
+
+def test_catalogue_prints_the_counts_the_extent_the_findings_and_the_set_checks(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(
+        pipeline.terrain, "catalogue_source", lambda conn, spec, raw: catalogue_result()
+    )
+    code, out, _ = run(["catalogue", "dev", "nrw_dgm1"], capsys)
+    assert code == 0
+    assert "35,860 tiles (12 new)" in out
+    assert "extent: 280,000 5,652,000 to 282,000 5,653,000 (EPSG:25832)" in out
+    assert "findings: off_grid 2" in out
+    assert "0 duplicate corners, 0 overlaps, 1 holes (1.0 km2)" in out
+
+
+def test_catalogue_names_the_tiles_it_could_not_read_and_exits_with_one(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    result = catalogue_result({"dgm1_broken.tif": "not a TIFF file"})
+    monkeypatch.setattr(pipeline.terrain, "catalogue_source", lambda conn, spec, raw: result)
+    code, out, _ = run(["catalogue", "dev", "nrw_dgm1"], capsys)
+    assert code == 1
+    assert "unreadable: 1 tiles (not catalogued)" in out
+    assert "dgm1_broken.tif: not a TIFF file" in out
+
+
+def test_a_refused_catalogue_exits_with_one(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(pipeline.terrain, "catalogue_source", fail_with(CatalogueError("no tiles")))
+    code, _, err = run(["catalogue", "dev", "nrw_dgm1"], capsys)
+    assert code == 1
+    assert "ERROR nrw_dgm1: no tiles" in err

@@ -19,7 +19,7 @@ import re
 import shutil
 import tempfile
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +32,8 @@ EXPECTED_EPSG = 25832
 EXPECTED_PIXEL = 1.0
 EXPECTED_SIZE = 1000
 GRID = 1000.0
+GRID_TOLERANCE = 1e-6  # metres: coordinates come out of floating point arithmetic
+MAX_INNER_ZIP_BYTES = 8 << 30  # the zip inside a zip may not unpack to more than this
 NAME_KM = re.compile(r"_(\d{3})_(\d{4})_")  # dgm1_32_280_5652_1_nw_2022.tif -> 280, 5652 (km)
 
 TILES_SQL = """
@@ -42,7 +44,8 @@ ORDER BY name
 """
 SNAPSHOT_SQL = """
 SELECT local_path FROM meta.source_version
-WHERE source_id = %s ORDER BY created_at DESC, version_id DESC LIMIT 1
+WHERE source_id = %s AND status IN ('fetched', 'loaded')
+ORDER BY created_at DESC, version_id DESC LIMIT 1
 """
 KNOWN_SQL = "SELECT name, file_sha256 FROM staging.terrain_tile WHERE source_id = %s"
 INSERT_SQL = """
@@ -55,9 +58,10 @@ VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
 """
 CURRENT_SQL = """
 UPDATE staging.terrain_tile t
-SET is_current = (t.name, t.file_sha256) IN (
-    SELECT n, s FROM unnest(%s::text[], %s::text[]) AS u(n, s))
+SET is_current = NOT t.is_current
 WHERE t.source_id = %s
+  AND t.is_current <> ((t.name, t.file_sha256) IN (
+      SELECT n, s FROM unnest(%s::text[], %s::text[]) AS u(n, s)))
 """
 FLAGS_SQL = """
 SELECT flag, count(*) FROM staging.terrain_tile, unnest(qa_flags) AS flag
@@ -71,7 +75,9 @@ SELECT count(*) FROM (
 """
 OVERLAPS_SQL = """
 SELECT count(*) FROM staging.terrain_tile a JOIN staging.terrain_tile b
-  ON a.source_id = b.source_id AND a.tile_id < b.tile_id AND ST_Overlaps(a.footprint, b.footprint)
+  ON a.source_id = b.source_id AND a.tile_id < b.tile_id
+  AND ST_Intersects(a.footprint, b.footprint)
+  AND ST_Area(ST_Intersection(a.footprint, b.footprint)) > 0
 WHERE a.source_id = %s AND a.is_current AND b.is_current
 """
 EXTENT_SQL = """
@@ -105,6 +111,7 @@ class CatalogueResult:
     hole_km2: float
     extent: tuple[float, float, float, float]
     area_km2: float
+    unreadable: dict[str, str] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -118,7 +125,12 @@ class CatalogueResult:
             "hole_km2": self.hole_km2,
             "extent": list(self.extent),
             "area_km2": self.area_km2,
+            "unreadable": self.unreadable,
         }
+
+
+def _off_grid(value: float) -> bool:
+    return abs(value - round(value / GRID) * GRID) > GRID_TOLERANCE
 
 
 def findings(name: str, info: geotiff.GeoTiff) -> list[str]:
@@ -130,11 +142,13 @@ def findings(name: str, info: geotiff.GeoTiff) -> list[str]:
         flags.append("pixel_size_unexpected")
     if (info.width, info.height) != (EXPECTED_SIZE, EXPECTED_SIZE):
         flags.append("size_unexpected")
-    if info.x_min % GRID or info.y_min % GRID:
+    if _off_grid(info.x_min) or _off_grid(info.y_min):
         flags.append("off_grid")
     km = NAME_KM.search(name)
-    if km and (info.x_min != int(km.group(1)) * 1000 or info.y_min != int(km.group(2)) * 1000):
-        flags.append("name_extent_mismatch")
+    if km:
+        x_km, y_km = int(km.group(1)) * 1000, int(km.group(2)) * 1000
+        if abs(info.x_min - x_km) > GRID_TOLERANCE or abs(info.y_min - y_km) > GRID_TOLERANCE:
+            flags.append("name_extent_mismatch")
     if info.nodata is None:
         flags.append("nodata_missing")
     if info.sample_format != 3:
@@ -181,19 +195,35 @@ def _insert(
 
 def _from_tiles(
     conn: psycopg.Connection[Any], spec: SourceSpec, raw: Path, known: set[tuple[str, str]]
-) -> tuple[list[tuple[str, str]], int]:
-    """The tiles recorded by the tile fetcher; new ones get their header read."""
-    current, new = [], 0
+) -> tuple[list[tuple[str, str]], int, dict[str, str]]:
+    """The tiles recorded by the tile fetcher; new ones get their header read.
+
+    A tile whose file is missing, whose size is not the one recorded when it was fetched, or whose
+    header cannot be described is reported, not catalogued, and does not stop the others.
+    (Re-hashing every file is the job of ``tiles --verify``.)
+    """
+    current: list[tuple[str, str]] = []
+    unreadable: dict[str, str] = {}
+    new = 0
     for name, local_path, sha256, size in conn.execute(TILES_SQL, (spec.source_id,)).fetchall():
-        current.append((str(name), str(sha256)))
         if (str(name), str(sha256)) in known:
+            current.append((str(name), str(sha256)))
             continue
         path = raw / str(local_path)
-        with path.open("rb") as handle:
-            info = geotiff.parse(handle.read(geotiff.PREFIX), str(name))
+        try:
+            found = path.stat().st_size
+            if found != int(size):
+                msg = f"the file is {found} bytes, the fetch recorded {int(size)}"
+                raise geotiff.GeoTiffError(msg)
+            with path.open("rb") as handle:
+                info = geotiff.parse(handle.read(geotiff.PREFIX), str(name))
+        except (OSError, geotiff.GeoTiffError) as exc:
+            unreadable[str(name)] = str(exc)
+            continue
+        current.append((str(name), str(sha256)))
         _insert(conn, spec, str(name), str(sha256), int(size), info)
         new += 1
-    return current, new
+    return current, new, unreadable
 
 
 def tif_members(archive: zipfile.ZipFile) -> list[tuple[str, int]]:
@@ -219,8 +249,11 @@ def _read_members(
     spec: SourceSpec,
     archive: zipfile.ZipFile,
     known: set[tuple[str, str]],
-) -> tuple[list[tuple[str, str]], int]:
-    current, new = [], 0
+) -> tuple[list[tuple[str, str]], int, dict[str, str]]:
+    current: list[tuple[str, str]] = []
+    unreadable: dict[str, str] = {}
+    seen: dict[str, str] = {}
+    new = 0
     for member, size in tif_members(archive):
         name = Path(member).name
         with archive.open(member) as handle:
@@ -229,16 +262,29 @@ def _read_members(
             while chunk := handle.read(1 << 22):
                 digest.update(chunk)
         sha256 = digest.hexdigest()
+        if name in seen:
+            if seen[name] != sha256:
+                msg = f"{name} occurs twice in the zip with different content"
+                raise CatalogueError(msg)
+            continue  # the same file in two folders is one tile
+        seen[name] = sha256
+        if (name, sha256) in known:
+            current.append((name, sha256))
+            continue
+        try:
+            info = geotiff.parse(head, name)
+        except geotiff.GeoTiffError as exc:
+            unreadable[name] = str(exc)
+            continue
         current.append((name, sha256))
-        if (name, sha256) not in known:
-            _insert(conn, spec, name, sha256, size, geotiff.parse(head, name))
-            new += 1
-    return current, new
+        _insert(conn, spec, name, sha256, size, info)
+        new += 1
+    return current, new, unreadable
 
 
 def _from_zip(
     conn: psycopg.Connection[Any], spec: SourceSpec, raw: Path, known: set[tuple[str, str]]
-) -> tuple[list[tuple[str, str]], int]:
+) -> tuple[list[tuple[str, str]], int, dict[str, str]]:
     """The tiles of the newest snapshot, a zip, or of the zip inside it."""
     row = conn.execute(SNAPSHOT_SQL, (spec.source_id,)).fetchone()
     if row is None:
@@ -249,6 +295,9 @@ def _from_zip(
         if tif_members(outer):
             return _read_members(conn, spec, outer, known)
         inner = inner_zip(outer, path.name)
+        if outer.getinfo(inner).file_size > MAX_INNER_ZIP_BYTES:
+            msg = f"{inner}: the zip inside unpacks to more than {MAX_INNER_ZIP_BYTES:,} bytes"
+            raise CatalogueError(msg)
         with tempfile.TemporaryDirectory(prefix="cabler-terrain-") as scratch:
             unpacked = Path(scratch) / Path(inner).name
             with outer.open(inner) as source, unpacked.open("wb") as target:
@@ -269,12 +318,12 @@ def catalogue_source(conn: psycopg.Connection[Any], spec: SourceSpec, raw: Path)
         known = {(str(n), str(s)) for n, s in conn.execute(KNOWN_SQL, (spec.source_id,)).fetchall()}
         with conn.transaction():
             reader = _from_tiles if spec.tiles_kind is not None else _from_zip
-            current, new = reader(conn, spec, raw, known)
+            current, new, unreadable = reader(conn, spec, raw, known)
             if not current:
                 msg = f"{spec.source_id}: there are no tiles to catalogue"
                 raise CatalogueError(msg)
             conn.execute(
-                CURRENT_SQL, ([n for n, _ in current], [s for _, s in current], spec.source_id)
+                CURRENT_SQL, (spec.source_id, [n for n, _ in current], [s for _, s in current])
             )
             conn.execute("ANALYZE staging.terrain_tile")
         flags = {str(f): int(c) for f, c in conn.execute(FLAGS_SQL, (spec.source_id,)).fetchall()}
@@ -296,6 +345,7 @@ def catalogue_source(conn: psycopg.Connection[Any], spec: SourceSpec, raw: Path)
             hole_km2=round(float(holes[1]) / 1e6, 3),
             extent=(float(extent[1]), float(extent[2]), float(extent[3]), float(extent[4])),
             area_km2=float(extent[5]),
+            unreadable=unreadable,
         )
         run.result = result.to_json()
     return result
