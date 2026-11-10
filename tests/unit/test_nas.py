@@ -238,3 +238,15 @@ def test_a_part_that_unpacks_to_more_than_the_limit_is_refused(
     monkeypatch.setattr(nas, "MAX_PART_BYTES", 10)
     with pytest.raises(NasError, match="unpacks to more than"):
         list(nas.read_export(path, ("parcel",)))
+
+
+def test_a_damaged_part_is_a_nas_error_not_a_zip_error(tmp_path: Path) -> None:
+    part = document(parcel_xml("A", surface(square_ring(0, 0))))
+    path = make_zip(tmp_path, {"p.xml": part})
+    # one digit changed inside the stored part: still valid XML, but the checksum of the zip fails
+    assert b"100" in part
+    raw = path.read_bytes()
+    assert part in raw
+    path.write_bytes(raw.replace(part, part.replace(b"100", b"101", 1)))
+    with pytest.raises(NasError, match=r"p\.xml: the part is damaged"):
+        list(nas.read_export(path, ("parcel",)))

@@ -257,10 +257,14 @@ def read_export(path: Path, themes: tuple[str, ...]) -> Iterator[Feature]:
             if archive.getinfo(part).file_size > MAX_PART_BYTES:
                 msg = f"{part}: the part unpacks to more than {MAX_PART_BYTES:,} bytes"
                 raise NasError(msg)
-            with archive.open(part) as handle:
-                for feature in parcels(handle):
-                    if feature.key in seen:
-                        msg = f"{part}: the parcel {feature.key} occurs twice"
-                        raise NasError(msg)
-                    seen.add(feature.key)
-                    yield feature
+            try:
+                with archive.open(part) as handle:
+                    for feature in parcels(handle):
+                        if feature.key in seen:
+                            msg = f"{part}: the parcel {feature.key} occurs twice"
+                            raise NasError(msg)
+                        seen.add(feature.key)
+                        yield feature
+            except zipfile.BadZipFile as exc:  # the checksum is verified when the part ends
+                msg = f"{part}: the part is damaged ({exc})"
+                raise NasError(msg) from exc

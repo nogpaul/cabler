@@ -20,13 +20,14 @@ import shutil
 import tempfile
 import zipfile
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import psycopg
 
 from cabler import geotiff, load, runs
 from cabler.sources import SourceSpec
+from cabler.tiles import is_safe_name
 
 EXPECTED_EPSG = 25832
 EXPECTED_PIXEL = 1.0
@@ -34,6 +35,7 @@ EXPECTED_SIZE = 1000
 GRID = 1000.0
 GRID_TOLERANCE = 1e-6  # metres: coordinates come out of floating point arithmetic
 MAX_INNER_ZIP_BYTES = 8 << 30  # the zip inside a zip may not unpack to more than this
+MAX_UNREADABLE_LISTED = 100  # tiles named in the stored report; the count is always stored
 NAME_KM = re.compile(r"_(\d{3})_(\d{4})_")  # dgm1_32_280_5652_1_nw_2022.tif -> 280, 5652 (km)
 
 TILES_SQL = """
@@ -125,7 +127,8 @@ class CatalogueResult:
             "hole_km2": self.hole_km2,
             "extent": list(self.extent),
             "area_km2": self.area_km2,
-            "unreadable": self.unreadable,
+            "unreadable": dict(list(self.unreadable.items())[:MAX_UNREADABLE_LISTED]),
+            "unreadable_count": len(self.unreadable),
         }
 
 
@@ -226,12 +229,18 @@ def _from_tiles(
     return current, new, unreadable
 
 
+def _is_metadata(member: str) -> bool:
+    """Files that archive tools add: ``__MACOSX/`` folders and names that start with a dot."""
+    parts = PurePosixPath(member).parts
+    return "__MACOSX" in parts or parts[-1].startswith(".")
+
+
 def tif_members(archive: zipfile.ZipFile) -> list[tuple[str, int]]:
-    """The tile files of a zip: name and size."""
+    """The tile files of a zip: name and size. Archive metadata is not a tile."""
     return [
         (i.filename, i.file_size)
         for i in archive.infolist()
-        if i.filename.lower().endswith(".tif") and not i.is_dir()
+        if i.filename.lower().endswith(".tif") and not i.is_dir() and not _is_metadata(i.filename)
     ]
 
 
@@ -256,6 +265,10 @@ def _read_members(
     new = 0
     for member, size in tif_members(archive):
         name = Path(member).name
+        if not is_safe_name(name):
+            # shown as Python writes it, so a control character cannot reach a terminal
+            unreadable[ascii(name)] = "not a plain file name"
+            continue
         with archive.open(member) as handle:
             head = handle.read(geotiff.PREFIX)
             digest = hashlib.sha256(head)
@@ -321,6 +334,9 @@ def catalogue_source(conn: psycopg.Connection[Any], spec: SourceSpec, raw: Path)
             current, new, unreadable = reader(conn, spec, raw, known)
             if not current:
                 msg = f"{spec.source_id}: there are no tiles to catalogue"
+                if unreadable:
+                    first, why = next(iter(unreadable.items()))
+                    msg += f"; all {len(unreadable):,} could not be read (first: {first}: {why})"
                 raise CatalogueError(msg)
             conn.execute(
                 CURRENT_SQL, (spec.source_id, [n for n, _ in current], [s for _, s in current])

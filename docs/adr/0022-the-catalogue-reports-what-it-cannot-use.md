@@ -36,3 +36,17 @@ changed so that it did not.
 - A catalogue run that reports unreadable tiles has stored the rest; the exit code tells the
   operator that something needs a look.
 - The limits are constants of the modules; a source with larger members needs a deliberate change.
+
+## Amendment: points found by the review of this release
+- **A run in which no tile can be read** refuses with the count and the first reason, not with the
+  general message that there is nothing to catalogue.
+- **The stored report names at most 100 unreadable tiles** and always stores their number; the
+  console already shows ten.
+- **A zip member whose name is not a plain file name**, by the rule of the tile index, is reported
+  as unreadable. It is named as Python writes it, so a control character cannot reach the terminal
+  or the database.
+- **A damaged part of a parcel export** (the checksum of the zip fails when the part ends) is a
+  `NasError`, as it was before the part was streamed.
+- **The limit of the vector reader** is for every member, whether it is unpacked or streamed.
+- **Archive metadata is not a tile.** A member in a `__MACOSX/` folder or with a name that starts
+  with a dot is left out of the list, so it cannot make every run end with exit code 1.

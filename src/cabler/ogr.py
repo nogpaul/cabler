@@ -30,7 +30,7 @@ from cabler import tileset
 from cabler.features import Feature
 
 BATCH = 20_000
-MAX_UNPACKED_BYTES = 8 << 30  # a member that must be unpacked may not exceed this
+MAX_UNPACKED_BYTES = 8 << 30  # no member may declare more, whether it is unpacked or streamed
 
 
 class OgrError(Exception):

@@ -69,7 +69,15 @@ def make_zip(path: Path, members: dict[str, bytes]) -> Path:
 def test_the_tile_files_of_a_zip_are_listed_without_folders_or_other_files(tmp_path: Path) -> None:
     path = make_zip(
         tmp_path / "a.zip",
-        {"x/a.tif": b"1", "x/b.TIF": b"22", "x/": b"", "readme.csv": b"c", "x/c.tif.xml": b"d"},
+        {
+            "x/a.tif": b"1",
+            "x/b.TIF": b"22",
+            "x/": b"",
+            "readme.csv": b"c",
+            "x/c.tif.xml": b"d",
+            "__MACOSX/x/._a.tif": b"3",  # archive metadata is not a tile
+            "x/.hidden.tif": b"4",
+        },
     )
     with zipfile.ZipFile(path) as archive:
         assert terrain.tif_members(archive) == [("x/a.tif", 1), ("x/b.TIF", 2)]
@@ -91,3 +99,32 @@ def test_floating_point_noise_in_a_corner_is_not_a_finding() -> None:
     noisy = info(origin_x=280000.0000001, origin_y=5653000.0000002)
     assert terrain.findings(NAME, noisy) == []
     assert terrain.findings("tile.tif", noisy) == []
+
+
+def result_with(unreadable: dict[str, str]) -> terrain.CatalogueResult:
+    return terrain.CatalogueResult(
+        source_id="s",
+        tiles=1,
+        new=1,
+        flags={},
+        duplicate_corners=0,
+        overlaps=0,
+        holes=0,
+        hole_km2=0.0,
+        extent=(0.0, 0.0, 1.0, 1.0),
+        area_km2=1.0,
+        unreadable=unreadable,
+    )
+
+
+def test_the_stored_report_lists_a_bounded_number_of_unreadable_tiles() -> None:
+    unreadable = {f"t{i}.tif": "bad" for i in range(250)}
+    stored = result_with(unreadable).to_json()
+    assert stored["unreadable_count"] == 250
+    assert list(stored["unreadable"]) == list(unreadable)[: terrain.MAX_UNREADABLE_LISTED]
+
+
+def test_a_short_unreadable_list_is_stored_whole() -> None:
+    stored = result_with({"a.tif": "x", "b.tif": "y"}).to_json()
+    assert stored["unreadable"] == {"a.tif": "x", "b.tif": "y"}
+    assert stored["unreadable_count"] == 2
