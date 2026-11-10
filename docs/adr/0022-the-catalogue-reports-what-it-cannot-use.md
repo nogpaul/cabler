@@ -48,3 +48,5 @@ changed so that it did not.
 - **A damaged part of a parcel export** (the checksum of the zip fails when the part ends) is a
   `NasError`, as it was before the part was streamed.
 - **The limit of the vector reader** is for every member, whether it is unpacked or streamed.
+- **Archive metadata is not a tile.** A member in a `__MACOSX/` folder or with a name that starts
+  with a dot is left out of the list, so it cannot make every run end with exit code 1.
