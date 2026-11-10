@@ -20,7 +20,7 @@ import shutil
 import tempfile
 import zipfile
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import psycopg
@@ -229,12 +229,18 @@ def _from_tiles(
     return current, new, unreadable
 
 
+def _is_metadata(member: str) -> bool:
+    """Files that archive tools add: ``__MACOSX/`` folders and names that start with a dot."""
+    parts = PurePosixPath(member).parts
+    return "__MACOSX" in parts or parts[-1].startswith(".")
+
+
 def tif_members(archive: zipfile.ZipFile) -> list[tuple[str, int]]:
-    """The tile files of a zip: name and size."""
+    """The tile files of a zip: name and size. Archive metadata is not a tile."""
     return [
         (i.filename, i.file_size)
         for i in archive.infolist()
-        if i.filename.lower().endswith(".tif") and not i.is_dir()
+        if i.filename.lower().endswith(".tif") and not i.is_dir() and not _is_metadata(i.filename)
     ]
 
 

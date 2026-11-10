@@ -69,7 +69,15 @@ def make_zip(path: Path, members: dict[str, bytes]) -> Path:
 def test_the_tile_files_of_a_zip_are_listed_without_folders_or_other_files(tmp_path: Path) -> None:
     path = make_zip(
         tmp_path / "a.zip",
-        {"x/a.tif": b"1", "x/b.TIF": b"22", "x/": b"", "readme.csv": b"c", "x/c.tif.xml": b"d"},
+        {
+            "x/a.tif": b"1",
+            "x/b.TIF": b"22",
+            "x/": b"",
+            "readme.csv": b"c",
+            "x/c.tif.xml": b"d",
+            "__MACOSX/x/._a.tif": b"3",  # archive metadata is not a tile
+            "x/.hidden.tif": b"4",
+        },
     )
     with zipfile.ZipFile(path) as archive:
         assert terrain.tif_members(archive) == [("x/a.tif", 1), ("x/b.TIF", 2)]
