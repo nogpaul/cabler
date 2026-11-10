@@ -122,3 +122,13 @@ def test_a_pattern_must_match_exactly_one_member() -> None:
         ogr._member(["readme.txt"], "*.gpkg")
     with pytest.raises(ogr.OgrError, match="2 members"):
         ogr._member(["a.gpkg", "b.gpkg"], "*.gpkg")
+
+
+def test_a_tile_path_that_leaves_the_raw_directory_is_refused(tmp_path: Path) -> None:
+    (tmp_path / "outside.zip").write_bytes(b"data")
+    raw = tmp_path / "raw"
+    entry = tile_entry(raw, "a.zip", b"data")
+    entry["path"] = "../outside.zip"  # a file that exists and has the recorded checksum
+    listing = write_listing(raw, [entry])
+    with pytest.raises(TileSetError, match="outside the raw directory"):
+        tileset.verified_tiles(listing)

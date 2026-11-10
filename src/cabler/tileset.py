@@ -147,6 +147,9 @@ def verified_tiles(listing: Path) -> list[tuple[SetTile, Path]]:
     result = []
     for tile in read_listing(listing):
         path = root / tile.path
+        if not path.resolve().is_relative_to(root.resolve()):
+            msg = f"{tile.path}: the tile lies outside the raw directory"
+            raise TileSetError(msg)
         if not path.is_file() or path.stat().st_size != tile.size or sha256_of(path) != tile.sha256:
             msg = f"{path}: the tile is missing or no longer matches the checksum recorded for it"
             raise TileSetError(msg)

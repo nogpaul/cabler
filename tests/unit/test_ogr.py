@@ -168,3 +168,12 @@ def test_the_documented_themes_cover_land_cover_parcels_and_the_protected_areas(
         "landscape_area",
     }
     assert ogr.THEMES["land_cover"].unpack
+
+
+def test_a_member_that_unpacks_to_more_than_the_limit_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive = make_zip(tmp_path, ROWS, "areas.gpkg")
+    monkeypatch.setattr(ogr, "MAX_UNPACKED_BYTES", 10)
+    with pytest.raises(OgrError, match="unpacks to more than"):
+        list(ogr.features(archive, BY_ROW_UNPACKED))

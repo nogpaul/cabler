@@ -204,3 +204,37 @@ def test_bad_archives_and_themes_are_refused(tmp_path: Path) -> None:
     empty = make_zip(tmp_path, {"readme.txt": b"x"}, "empty.zip")
     with pytest.raises(NasError, match="no XML part"):
         list(nas.read_export(empty, ("parcel",)))
+
+
+def test_an_arc_far_from_the_origin_stays_on_its_circle() -> None:
+    # radius 1 m at real UTM coordinates: the squares of the coordinates used to cost millimetres
+    cx, cy, r = 548050.0, 5934000.0, 1.0
+    angles = [math.radians(a) for a in (10, 30, 50)]
+    p1, p2, p3 = ((cx + r * math.cos(a), cy + r * math.sin(a)) for a in angles)
+    points = nas.arc_points(p1, p2, p3)
+    assert points[-1] == p3
+    assert all(abs(math.hypot(x - cx, y - cy) - r) < 1e-6 for x, y in points)
+
+
+def test_a_surface_with_two_patches_is_refused_not_truncated() -> None:
+    ring = square_ring(0, 0)
+    patch = (
+        f"<gml:PolygonPatch><gml:exterior><gml:Ring>{ring}</gml:Ring></gml:exterior>"
+        "</gml:PolygonPatch>"
+    )
+    two = (
+        '<position><gml:Surface gml:id="S" srsName="urn:adv:crs:ETRS89_UTM32"><gml:patches>'
+        f"{patch}{patch}</gml:patches></gml:Surface></position>"
+    )
+    with pytest.raises(NasError, match="2 patches"):
+        list(nas.parcels(document(parcel_xml("K", two))))
+
+
+def test_a_part_that_unpacks_to_more_than_the_limit_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    part = document(parcel_xml("A", surface(square_ring(0, 0))))
+    path = make_zip(tmp_path, {"p.xml": part})
+    monkeypatch.setattr(nas, "MAX_PART_BYTES", 10)
+    with pytest.raises(NasError, match="unpacks to more than"):
+        list(nas.read_export(path, ("parcel",)))

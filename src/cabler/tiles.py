@@ -255,7 +255,8 @@ def _store(
     tiles_dir = raw / spec.source_id / "tiles"
     tiles_dir.mkdir(parents=True, exist_ok=True)
     target = tiles_dir / entry.name
-    if target.resolve().parent != tiles_dir.resolve():  # parse_index refuses such names already
+    if Path(os.path.normpath(target)).parent != Path(os.path.normpath(tiles_dir)):
+        # the folder as written, not as resolved; parse_index refuses such names already
         msg = f"{entry.name}: the tile would be stored outside its folder"
         raise TilesError(msg)
     if old is not None and target.exists():
