@@ -31,19 +31,24 @@ decision can change a result. And the result has to be reproducible from the raw
   reach, for which it lies closer than their nearest strict substation: if it were high voltage, it
   would change their nearest substation. Tier D has no impact and needs no review (half of the
   undecided substations). The rest are tiered by evidence: A conflicting or high-voltage hints, B
-  hints agree it is not, C no evidence. The queue lists A and C, most impact first.
-- **An audit sample measures the rules.** A stratified sample of the substations with hints is
-  drawn by a fixed hash (the same every time) and marked. What the reviewers find there is true
-  labelling of untagged substations, which corrects the bias of measuring the rules on tagged ones.
+  hints agree it is not, C no evidence. The queue lists A and C, most impact first,
+  then the audit sample.
+- **An audit sample measures the rules.** A stratified sample of the untagged substations that
+  have a hint and a wind unit within reach is drawn by a fixed hash (the same every time) and
+  marked. It does not depend on the tier or on any decision, so a decision never moves it. What
+  the reviewers find there is true labelling of untagged substations, which corrects the bias of
+  measuring the rules on tagged ones.
 - **One query, no temporary tables.** The application role has no right to create them, and keeps
   it that way; the facts of a build are computed with materialised CTEs.
 
 ## Consequences
 - On the real data: 20,092 substations; strict 983, likely 1,227, inclusive 17,964. Tiers A 173,
-  B 3,666, C 4,433, D 8,709; audit sample 265. A build takes 24 seconds.
+  B 3,666, C 4,433, D 8,709; audit sample 481. A build takes 24 seconds.
 - The impact is a straight-line proxy for "would change a route". The routing of a later phase
   replaces it where it matters. Wind units near a border may have a nearer substation outside the
   extract of their state.
 - A reviewer is a name in a text field, not an authenticated person; the project has one user.
 - The measured precision of the hint rules (leave-tag-out on tagged substations, with the audit
   sample as a check) is the next release.
+- Version 0.18.0 drew the audit sample from the tiers, so a recorded decision moved it. Version
+  0.18.1 draws it from the evidence and the reach only, which makes it a fixed group.
