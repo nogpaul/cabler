@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="cabler-tests">
+  <!-- Substations with a voltage tag, to measure the hint rules with the tag left out.
+       Each line joins its substations, so they sit on it. Expected hint if the tag were missing:
+       t1 110 kV on a 110 kV line         -> hv_candidate   (high)
+       t5  20 kV on a 110 kV line         -> hv_candidate   (not high: the rule is wrong here)
+       t6 110 kV minor_distribution on it -> conflict       (high)
+       u1 untagged, on the same line      -> hv_candidate   (not tagged: not measured)
+       t7  20 kV on a 20 kV line          -> likely_low_voltage (not high)
+       t2 110 kV transmission, far away   -> hv_candidate   (high)
+       t3 380 kV, far away, no tags       -> no_evidence    (high)
+       t4  20 kV minor_distribution, far  -> likely_low_voltage (not high) -->
+  <node id="201" version="1" timestamp="2026-01-01T10:00:00Z" lat="53.5000" lon="10.0000">
+    <tag k="power" v="substation"/>
+    <tag k="voltage" v="110000"/>
+  </node>
+  <node id="202" version="1" timestamp="2026-01-01T10:00:00Z" lat="53.5100" lon="10.0000">
+    <tag k="power" v="substation"/>
+    <tag k="voltage" v="20000"/>
+  </node>
+  <way id="200" version="1" timestamp="2026-01-01T10:00:00Z">
+    <nd ref="201"/>
+    <nd ref="202"/>
+    <tag k="power" v="line"/>
+    <tag k="voltage" v="110000"/>
+  </way>
+  <node id="211" version="1" timestamp="2026-01-01T10:00:00Z" lat="53.6000" lon="10.1000">
+    <tag k="power" v="substation"/>
+    <tag k="voltage" v="110000"/>
+    <tag k="substation" v="minor_distribution"/>
+  </node>
+  <node id="212" version="1" timestamp="2026-01-01T10:00:00Z" lat="53.6100" lon="10.1000">
+    <tag k="power" v="substation"/>
+  </node>
+  <way id="210" version="1" timestamp="2026-01-01T10:00:00Z">
+    <nd ref="211"/>
+    <nd ref="212"/>
+    <tag k="power" v="line"/>
+    <tag k="voltage" v="110000"/>
+  </way>
+  <node id="221" version="1" timestamp="2026-01-01T10:00:00Z" lat="53.7000" lon="10.2000">
+    <tag k="power" v="substation"/>
+    <tag k="voltage" v="20000"/>
+  </node>
+  <node id="222" version="1" timestamp="2026-01-01T10:00:00Z" lat="53.7100" lon="10.2000"/>
+  <way id="220" version="1" timestamp="2026-01-01T10:00:00Z">
+    <nd ref="221"/>
+    <nd ref="222"/>
+    <tag k="power" v="line"/>
+    <tag k="voltage" v="20000"/>
+  </way>
+  <node id="231" version="1" timestamp="2026-01-01T10:00:00Z" lat="53.8000" lon="10.3000">
+    <tag k="power" v="substation"/>
+    <tag k="voltage" v="110000"/>
+    <tag k="substation" v="transmission"/>
+  </node>
+  <node id="232" version="1" timestamp="2026-01-01T10:00:00Z" lat="53.8000" lon="10.4000">
+    <tag k="power" v="substation"/>
+    <tag k="voltage" v="380000"/>
+  </node>
+  <node id="233" version="1" timestamp="2026-01-01T10:00:00Z" lat="53.8000" lon="10.5000">
+    <tag k="power" v="substation"/>
+    <tag k="voltage" v="20000"/>
+    <tag k="substation" v="minor_distribution"/>
+  </node>
+</osm>

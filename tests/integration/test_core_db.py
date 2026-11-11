@@ -17,8 +17,9 @@ import httpx
 import psycopg
 import pytest
 
-from cabler import apply, core, db, diff, fetch, load, remote, sources, validate
+from cabler import apply, core, db, diff, evaluate, fetch, load, remote, sources, validate
 from cabler.core import CoreError, RuleSet
+from cabler.evaluate import Cell
 
 pytestmark = pytest.mark.integration
 
@@ -431,6 +432,88 @@ def test_a_rule_set_version_cannot_be_reused_with_other_parameters() -> None:
             core.register_rules(conn, dataclasses.replace(RULES, reach_m=5000))
         with pytest.raises(CoreError, match="names no source"):
             core.build_substations(conn, RuleSet(version="0.0.3"))
+
+
+def test_the_rules_are_measured_on_tagged_substations_with_their_tag_left_out(
+    tmp_path: Path,
+) -> None:
+    with db.connect("app") as conn, conn.transaction(force_rollback=True):
+        publisher = Publisher()
+        publisher.release("power_tagged.osm", '"r1"')
+        spec = make_spec()
+        sources.register(conn, spec)
+        ingest(conn, publisher, spec, tmp_path)
+        assert validate.validate_source(conn, spec).status == "validated"
+        result = evaluate.evaluate_rules(conn, RULES)
+        ours = [c for c in result.leave_out if c.source_id == spec.source_id]
+        assert ours == [
+            Cell(spec.source_id, "hv_candidate", 3, 2),  # t1, t2 high; t5 is 20 kV
+            Cell(spec.source_id, "conflict", 1, 1),
+            Cell(spec.source_id, "likely_low_voltage", 2, 0),
+            Cell(spec.source_id, "no_evidence", 1, 1),
+        ]
+
+
+def test_the_evaluation_applies_the_same_rules_as_the_review_view(tmp_path: Path) -> None:
+    with db.connect("app") as conn, conn.transaction(force_rollback=True):
+        spec, version = prepared(conn, tmp_path)
+        by_rules = evaluate.hints(conn, spec.source_id, version)
+        in_view = dict(
+            conn.execute(
+                "SELECT osm_key, suggestion FROM staging.substation_review WHERE source_id = %s",
+                (spec.source_id,),
+            ).fetchall()
+        )
+        assert len(in_view) == 5
+        untagged = {key: hint for (_, key), (hint, tag) in by_rules.items() if tag is None}
+        assert untagged == in_view
+        assert by_rules[("points", "n106")] == ("no_evidence", 110_000)
+
+
+def test_audit_labels_are_counted_per_hint(tmp_path: Path) -> None:
+    with db.connect("app") as conn, conn.transaction(force_rollback=True):
+        spec, _ = prepared(conn, tmp_path)
+        core.build_substations(conn, RULES)
+        drawn = dict(
+            conn.execute(
+                "SELECT hint, osm_key FROM core.substation_current"
+                " WHERE audit_sample AND source_id = %s",
+                (spec.source_id,),
+            ).fetchall()
+        )
+        assert set(drawn) == {"hv_candidate", "conflict", "likely_low_voltage"}
+
+        def cells() -> dict[str, Cell]:
+            audit = evaluate.evaluate_rules(conn, RULES).audit
+            return {c.suggestion: c for c in audit if c.source_id == spec.source_id}
+
+        assert {k: (c.n, c.n_unlabelled) for k, c in cells().items()} == {
+            "hv_candidate": (0, 1),
+            "conflict": (0, 1),
+            "likely_low_voltage": (0, 1),
+        }
+        decisions = (
+            ("conflict", "high_voltage"),
+            ("likely_low_voltage", "not_a_substation"),
+            ("hv_candidate", "not_high_voltage"),
+        )
+        for hint, decision in decisions:
+            core.record_decision(
+                conn,
+                spec.source_id,
+                "points",
+                drawn[hint],
+                decision,
+                reason="checked on the map",
+                reviewer="p",
+                rules=RULES,
+            )
+        after = cells()
+        assert after["conflict"] == Cell(spec.source_id, "conflict", 1, 1)
+        assert after["hv_candidate"] == Cell(spec.source_id, "hv_candidate", 1, 0)
+        assert after["likely_low_voltage"] == Cell(
+            spec.source_id, "likely_low_voltage", 0, 0, n_not_a_substation=1
+        )
 
 
 def test_the_core_views_are_readable_by_the_read_only_role() -> None:
