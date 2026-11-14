@@ -17,6 +17,7 @@ Usage: python -m cabler.pipeline list
        python -m cabler.pipeline queue {dev,staging,production} [--tier T] [--limit N]
        python -m cabler.pipeline decide {dev,staging,production} SOURCE LAYER KEY DECISION
            --reason TEXT --reviewer NAME
+       python -m cabler.pipeline evaluate {dev,staging,production}
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ from cabler import (
     core,
     db,
     diff,
+    evaluate,
     fetch,
     load,
     remote,
@@ -349,6 +351,18 @@ def _run_queue(env: str, tier: str | None, limit: int) -> int:
     return 0
 
 
+def _run_evaluate(env: str) -> int:
+    with db.connect("app", environ={"CABLER_ENV": env}) as conn:
+        try:
+            result = evaluate.evaluate_rules(conn)
+        except CoreError as exc:
+            print(f"ERROR evaluate: {exc}", file=sys.stderr)
+            return 1
+    for line in evaluate.format_report(result):
+        print(line)
+    return 0
+
+
 def _run_decide(env: str, args: argparse.Namespace) -> int:
     with db.connect("app", environ={"CABLER_ENV": env}) as conn:
         try:
@@ -478,6 +492,8 @@ def main(argv: list[str] | None = None) -> int:
     queue_cmd.add_argument("name", choices=NAMES)
     queue_cmd.add_argument("--tier", choices=list("ABCD"), help="only this tier")
     queue_cmd.add_argument("--limit", type=int, default=20, help="rows to show")
+    evaluate_cmd = commands.add_parser("evaluate", help="measure the hint rules")
+    evaluate_cmd.add_argument("name", choices=NAMES)
     decide_cmd = commands.add_parser("decide", help="record a decision about one substation")
     decide_cmd.add_argument("name", choices=NAMES)
     decide_cmd.add_argument("source", help="source id, for example osm_nrw")
@@ -536,6 +552,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.action == "queue":
         return _run_queue(args.name, args.tier, args.limit)
+
+    if args.action == "evaluate":
+        return _run_evaluate(args.name)
 
     if args.action == "decide":
         return _run_decide(args.name, args)

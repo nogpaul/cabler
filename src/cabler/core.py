@@ -382,23 +382,32 @@ def _insert_values(build_id: int, r: Row) -> tuple[Any, ...]:
     )
 
 
-def build_substations(conn: psycopg.Connection[Any], rules: RuleSet = DEFAULT_RULES) -> BuildResult:
-    """Build the substations of the core from the newest validated snapshots and the decisions."""
+def validated_versions(conn: psycopg.Connection[Any], rules: RuleSet) -> dict[str, int]:
+    """The newest validated snapshot of each source of the rule set.
+
+    A source without a verdict, or whose newest snapshot was quarantined, stops the work.
+    """
     if not rules.states:
         msg = "the rule set names no source"
         raise CoreError(msg)
+    versions: dict[str, int] = {}
+    for source_id in sorted(rules.states):
+        verdict = conn.execute(VERDICT_SQL, (source_id,)).fetchone()
+        if verdict is None:
+            msg = f"{source_id}: no validated snapshot; run validate first"
+            raise CoreError(msg)
+        if verdict[1] != "passed":
+            msg = f"{source_id}: the newest snapshot ({verdict[0]}) was quarantined"
+            raise CoreError(msg)
+        versions[source_id] = int(verdict[0])
+    return versions
+
+
+def build_substations(conn: psycopg.Connection[Any], rules: RuleSet = DEFAULT_RULES) -> BuildResult:
+    """Build the substations of the core from the newest validated snapshots and the decisions."""
     with conn.transaction():
+        versions = validated_versions(conn, rules)
         rule_set_id = register_rules(conn, rules)
-        versions: dict[str, int] = {}
-        for source_id in sorted(rules.states):
-            verdict = conn.execute(VERDICT_SQL, (source_id,)).fetchone()
-            if verdict is None:
-                msg = f"{source_id}: no validated snapshot; run validate first"
-                raise CoreError(msg)
-            if verdict[1] != "passed":
-                msg = f"{source_id}: the newest snapshot ({verdict[0]}) was quarantined"
-                raise CoreError(msg)
-            versions[source_id] = int(verdict[0])
         rows: list[Row] = []
         for source_id in sorted(rules.states):
             rows += _facts(conn, rules, source_id, rules.states[source_id], versions[source_id])

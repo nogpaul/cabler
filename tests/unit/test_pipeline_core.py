@@ -9,6 +9,7 @@ import pytest
 
 from cabler import core, pipeline
 from cabler.core import CoreError
+from cabler.evaluate import Cell, Evaluation
 
 
 @pytest.fixture(autouse=True)
@@ -158,3 +159,26 @@ def test_a_refused_decision_exits_with_one(
     code, _, err = run([*argv, "--reason", "r", "--reviewer", "p"], capsys)
     assert code == 1
     assert "ERROR decide: osm_nrw/points/n1 is not a current substation" in err
+
+
+def test_evaluate_prints_the_measured_shares(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    result = Evaluation({"osm_nrw": 397}, [Cell("osm_nrw", "hv_candidate", 10, 5)], [], 3)
+    monkeypatch.setattr(pipeline.evaluate, "evaluate_rules", lambda conn: result)
+    code, out, _ = run(["evaluate", "dev"], capsys)
+    assert code == 0
+    assert "hv_candidate" in out
+    assert "50.0%" in out
+
+
+def test_a_refused_evaluation_exits_with_one(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def refuse(conn: Any) -> Any:
+        raise CoreError("osm_nrw: no validated snapshot; run validate first")
+
+    monkeypatch.setattr(pipeline.evaluate, "evaluate_rules", refuse)
+    code, _, err = run(["evaluate", "dev"], capsys)
+    assert code == 1
+    assert "ERROR evaluate: osm_nrw: no validated snapshot" in err
