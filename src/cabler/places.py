@@ -35,7 +35,9 @@ FROM core.substation_current
 WHERE source_id = %(source)s
 """
 # The place of a unit is looked up as the place of a substation is: land before water, the lowest
-# key on a tie. A unit whose key is not in the boundaries at all has no distance (key_unknown).
+# key on a tie. A unit for which the register names no municipality (no_key) has nothing to agree
+# with, and a unit whose key is not in the boundaries at all has no distance (key_unknown); neither
+# counts as agreeing, even when its coordinate lies in no municipality either.
 WIND_SQL = """
 WITH p AS (
     SELECT w.mk, w.geom,
@@ -47,19 +49,20 @@ WITH p AS (
             AND NOT (qa_flags && %(bad_flags)s::text[])) w
 ), d AS (
     SELECT p.pk, p.mk,
-           CASE WHEN p.pk IS NOT DISTINCT FROM p.mk THEN NULL ELSE
+           CASE WHEN p.mk IS NULL OR p.pk = p.mk THEN NULL ELSE
                (SELECT min(ST_Distance(a.geom, p.geom)) FROM staging.admin_area_current a
                 WHERE a.source_id = %(admin)s AND a.level = 'municipality' AND a.area_key = p.mk)
            END AS dist
     FROM p
 )
-SELECT count(*), count(pk), count(*) FILTER (WHERE pk IS NOT DISTINCT FROM mk),
-       count(*) FILTER (WHERE pk IS DISTINCT FROM mk AND dist IS NULL),
+SELECT count(*), count(pk), count(*) FILTER (WHERE pk = mk),
+       count(*) FILTER (WHERE mk IS NOT NULL AND pk IS DISTINCT FROM mk AND dist IS NULL),
        count(*) FILTER (WHERE dist <= %(b1)s),
        count(*) FILTER (WHERE dist > %(b1)s AND dist <= %(b2)s),
        count(*) FILTER (WHERE dist > %(b2)s AND dist <= %(b3)s),
        count(*) FILTER (WHERE dist > %(b3)s AND dist <= %(b4)s),
-       count(*) FILTER (WHERE dist > %(b4)s)
+       count(*) FILTER (WHERE dist > %(b4)s),
+       count(*) FILTER (WHERE mk IS NULL)
 FROM d
 """
 ADMIN_SQL = """
@@ -87,6 +90,7 @@ class WindAgreement:
     same: int  # ... and it is the one that the register names
     key_unknown: int  # the register names a municipality that the boundaries do not have
     bands: tuple[int, ...]  # the others, by distance to the named municipality
+    no_key: int = 0  # the register names no municipality at all
 
     @property
     def share(self) -> float | None:
@@ -126,7 +130,9 @@ def check_places(conn: psycopg.Connection[Any], rules: RuleSet = DEFAULT_RULES) 
         if found is not None:
             counts = [int(x) for x in found]
             wind.append(
-                WindAgreement(state, counts[0], counts[1], counts[2], counts[3], tuple(counts[4:]))
+                WindAgreement(
+                    state, counts[0], counts[1], counts[2], counts[3], tuple(counts[4:9]), counts[9]
+                )
             )
     return Places(municipalities, substations, wind)
 
@@ -162,17 +168,18 @@ def format_report(result: Places) -> list[str]:
     header = f"  {'state':<6} {'units':>7} {'same':>7} {'share':>7}  " + " ".join(
         f"{name:>9}" for name in names
     )
-    lines.append(header + f" {'key unknown':>12}")
+    lines.append(header + f" {'key unknown':>12} {'no key':>7}")
     for w in result.wind:
         lines.append(
             f"  {w.state_key:<6} {w.units:>7,} {w.same:>7,} {_share(w.same, w.units):>7}  "
             + " ".join(f"{n:>9,}" for n in w.bands)
-            + f" {w.key_unknown:>12,}"
+            + f" {w.key_unknown:>12,} {w.no_key:>7,}"
         )
     lines += [
         "",
         "The distance columns count the units that lie outside the named municipality, by how far",
         "their coordinate is from it. The boundaries are generalised (1:250 000): a few hundred",
-        "metres at a border are not an error of the unit.",
+        "metres at a border are not an error of the unit. 'key unknown' are units whose register",
+        "key is not in the boundaries, 'no key' units for which the register names none.",
     ]
     return lines

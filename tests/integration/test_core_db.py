@@ -268,7 +268,7 @@ def location_of(conn: psycopg.Connection[Any], osm_key: str) -> tuple[float, flo
 
 def test_every_substation_gets_the_place_that_covers_it(tmp_path: Path) -> None:
     with db.connect("app") as conn, conn.transaction(force_rollback=True):
-        prepared(conn, tmp_path)
+        _, version = prepared(conn, tmp_path)
         # n105 lies exactly on the edge that Gamma and Delta share; n106 lies in the land part and
         # in a water part of the same municipality; n104 lies in no municipality at all.
         x5, y5 = location_of(conn, "n105")
@@ -323,11 +323,14 @@ def test_every_substation_gets_the_place_that_covers_it(tmp_path: Path) -> None:
                 " WHERE source_id = 'itest_source' AND unit_key = %s",
                 (key, unit),
             )
+        # w4 stands outside every municipality and the register names none for it: it has nothing
+        # to agree with, and it must not count as agreeing because both sides are empty.
+        conn.execute(WIND_SQL, ("itest_source", "w4", version, "In Betrieb", [], 10.4, 53.8))
         measured = places.check_places(conn, RULES)
         assert measured.municipalities == 6
         assert measured.substations == [SubstationPlaces("itest_source", 6, 5, 5)]
         # the state of the test source is 99, so every place found counts as "other state"
-        assert measured.wind == [WindAgreement("99", 3, 3, 1, 1, (0, 0, 0, 1, 0))]
+        assert measured.wind == [WindAgreement("99", 4, 3, 1, 1, (0, 0, 0, 1, 0), 1)]
 
 
 def test_the_queue_lists_the_decision_relevant_cases_first(tmp_path: Path) -> None:
