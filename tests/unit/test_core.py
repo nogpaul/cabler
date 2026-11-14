@@ -201,14 +201,41 @@ def test_the_content_hash_changes_when_anything_that_matters_changes() -> None:
     )
 
 
+def test_the_place_of_a_substation_is_part_of_the_content_hash() -> None:
+    reference = core.content_hash([make_row("n1"), make_row("n2")])
+    placed = replace(make_row("n2"), municipality_key="05916000", municipality="Herne")
+    assert core.content_hash([make_row("n1"), placed]) != reference
+    other_key = replace(placed, municipality_key="05913000")
+    assert core.content_hash([make_row("n1"), other_key]) != core.content_hash(
+        [make_row("n1"), placed]
+    )
+    other_district = replace(placed, district="Ennepe-Ruhr-Kreis")
+    assert core.content_hash([make_row("n1"), other_district]) != core.content_hash(
+        [make_row("n1"), placed]
+    )
+
+
+def test_a_row_has_no_place_until_one_is_found() -> None:
+    row = make_row("n1")
+    assert (row.municipality_key, row.municipality, row.district) == (None, None, None)
+    assert core._counts([row, replace(row, municipality_key="05916000")])["with_municipality"] == 1
+
+
+def test_the_default_rule_set_names_the_boundaries_and_is_a_new_version() -> None:
+    assert core.DEFAULT_RULES.admin_source == "bkg_vg250"
+    assert core.DEFAULT_RULES.version == "1.1.0"
+
+
 def test_the_parameters_of_a_rule_set_are_stable_and_complete() -> None:
     rules = RuleSet(version="1.0.0", states={"osm_nrw": "05", "osm_hamburg": "02"})
     parameters = rules.parameters()
     assert list(parameters["states"]) == ["osm_hamburg", "osm_nrw"]
     assert parameters["high_voltage_v"] == HIGH
     assert parameters["wind_statuses"] == ["In Betrieb", "In Planung"]
+    assert parameters["admin_source"] == "bkg_vg250"
     assert set(parameters) == {
         "states",
+        "admin_source",
         "high_voltage_v",
         "reach_m",
         "wind_statuses",

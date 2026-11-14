@@ -157,8 +157,43 @@ def test_only_epsg_coordinate_systems_are_accepted(crs: str | None, ok: bool) ->
             ogr.srid_of(crs, "x")
 
 
-def test_the_documented_themes_cover_land_cover_parcels_and_the_protected_areas() -> None:
+def test_the_administrative_themes_are_read_by_the_identifier_of_the_publisher(
+    tmp_path: Path,
+) -> None:
+    # The municipality key repeats (land and water part), OBJID does not.
+    gpkg = tmp_path / "DE_VG250.gpkg"
+    pyogrio.raw.write(
+        gpkg,
+        geometry=np.array([square(0, 0), square(20, 0)], dtype=object),
+        field_data=[
+            np.array(["OBJ1", "OBJ2"], dtype=object),
+            np.array(["02000000", "02000000"], dtype=object),
+            np.array([4, 2], dtype=np.int16),
+        ],
+        fields=["OBJID", "AGS", "GF"],
+        geometry_type="MultiPolygon",
+        crs="EPSG:25832",
+        driver="GPKG",
+        layer="vg250_gem",
+    )
+    archive = tmp_path / "vg250.zip"
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:
+        z.write(gpkg, "vg250_ebenen_0101/DE_VG250.gpkg")
+        z.writestr("dokumentation/aktualitaet.txt", "x")
+    found = list(ogr.features(archive, ogr.THEMES["municipality"]))
+    assert [f.key for f in found] == ["OBJ1", "OBJ2"]
+    assert {f.layer for f in found} == {"municipality"}
+    assert [f.attributes["AGS"] for f in found] == ["02000000", "02000000"]
+    assert [f.attributes["GF"] for f in found] == ["4", "2"]
+    assert all(f.srid == 25832 for f in found)
+    assert ogr.THEMES["district"].layer == "vg250_krs"
+    assert ogr.THEMES["district"].stored_as == "district"
+
+
+def test_the_documented_themes_cover_land_cover_parcels_places_and_the_protected_areas() -> None:
     assert set(ogr.THEMES) == {
+        "municipality",
+        "district",
         "land_cover",
         "parcel",
         "nature_reserve",

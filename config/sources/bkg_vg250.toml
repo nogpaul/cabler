@@ -1,0 +1,17 @@
+source_id = "bkg_vg250"
+title = "Administrative areas 1:250 000 (VG250), edition 1 January, all levels, UTM32s, GeoPackage"
+publisher = "Bundesamt für Kartographie und Geodäsie (BKG)"
+licence_id = "dl-de/by-2-0"
+licence_url = "https://www.govdata.de/dl-de/by-2-0"
+attribution = "© BKG (2026) dl-de/by-2-0"
+homepage = "https://gdz.bkg.bund.de/"
+
+[download]
+url = "https://daten.gdz.bkg.bund.de/produkte/vg/vg250_ebenen_0101/aktuell/vg250_01-01.utm32s.gpkg.ebenen.zip"
+allowed_hosts = ["daten.gdz.bkg.bund.de"]
+max_bytes = 300_000_000
+format = "gpkg.zip"
+
+[load]
+kind = "ogr"
+themes = ["municipality", "district"]

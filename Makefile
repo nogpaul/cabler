@@ -6,7 +6,7 @@ PY := .venv/bin/python
 ENV ?= dev
 
 .DEFAULT_GOAL := help
-.PHONY: help setup env db-up db-down db-psql db-reset migrate migrate-status sources register updates fetch load diff apply tiles catalogue validate review core queue evaluate check test-int lock
+.PHONY: help setup env db-up db-down db-psql db-reset migrate migrate-status sources register updates fetch load diff apply tiles catalogue validate review core queue evaluate places check test-int lock
 
 help: ## show this help
 > @grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
@@ -76,6 +76,9 @@ core: ## build the core substations and their scenarios ($(ENV))
 
 evaluate: ## measure the hint rules: leave-tag-out and audit labels ($(ENV))
 > $(PY) -m cabler.pipeline evaluate $(ENV)
+
+places: ## measure the places of substations and wind units against the boundaries ($(ENV))
+> $(PY) -m cabler.pipeline places $(ENV)
 
 queue: ## substations a person should look at: make queue [TIER=A] [LIMIT=20] ($(ENV))
 > $(PY) -m cabler.pipeline queue $(ENV) $(if $(TIER),--tier $(TIER),) $(if $(LIMIT),--limit $(LIMIT),)
