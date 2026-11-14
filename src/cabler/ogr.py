@@ -68,6 +68,10 @@ THEMES: dict[str, Theme] = {
     ),
     # One GeoPackage per district, named after it, so the member is found by its extension.
     "parcel": Theme("*.gpkg", "Flurstueck", "parcel", key="flstkennz", unpack=True),
+    # BKG VG250: one GeoPackage with every level in a folder named after the edition. OBJID is the
+    # only identifier that is unique (the municipality key repeats for a land and a water part).
+    "municipality": Theme("*DE_VG250.gpkg", "vg250_gem", "municipality", key="OBJID", unpack=True),
+    "district": Theme("*DE_VG250.gpkg", "vg250_krs", "district", key="OBJID", unpack=True),
 }
 
 

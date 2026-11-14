@@ -9,17 +9,23 @@ Run with:  CABLER_ENV=dev pytest -m integration   (after `python -m cabler.migra
 """
 
 import dataclasses
+import io
 import os
+import tempfile
+import zipfile
 from pathlib import Path
 from typing import Any
 
 import httpx
+import numpy as np
 import psycopg
+import pyogrio.raw
 import pytest
 
-from cabler import apply, core, db, diff, evaluate, fetch, load, remote, sources, validate
+from cabler import apply, core, db, diff, evaluate, fetch, load, places, remote, sources, validate
 from cabler.core import CoreError, RuleSet
 from cabler.evaluate import Cell
+from cabler.places import SubstationPlaces, WindAgreement
 
 pytestmark = pytest.mark.integration
 
@@ -27,8 +33,15 @@ if "CABLER_ENV" not in os.environ:
     pytest.skip("CABLER_ENV not set", allow_module_level=True)
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
+# The boundaries come from a source that only the place test creates, so that no other test sees
+# the real municipalities that may be loaded into the database.
 RULES = RuleSet(
-    version="0.0.1", states={"itest_source": "99"}, reach_m=3000, audit_min=1, audit_share=0.5
+    version="0.0.1",
+    states={"itest_source": "99"},
+    reach_m=3000,
+    audit_min=1,
+    audit_share=0.5,
+    admin_source="itest_admin",
 )
 
 
@@ -117,6 +130,7 @@ def test_a_build_puts_every_substation_into_its_scenarios_and_tier(tmp_path: Pat
             "likely": 3,
             "inclusive": 6,
             "audit_sample": 3,
+            "with_municipality": 0,
             "tier_A": 3,
             "tier_B": 0,
             "tier_C": 1,
@@ -151,11 +165,169 @@ def test_the_same_inputs_give_the_same_hash_and_the_build_is_recorded(tmp_path: 
             " FROM core.build WHERE build_id = %s",
             (second.build_id,),
         ).fetchone()
-        assert row == ({"itest_source": version, "wind_units": version}, 0, "6")
+        # no boundaries were loaded: the build says so with version 0 and gives no place
+        assert row == ({"itest_source": version, "itest_admin": 0, "wind_units": version}, 0, "6")
+        assert conn.execute(
+            "SELECT count(*) FROM core.substation"
+            " WHERE build_id = %s AND municipality_key IS NOT NULL",
+            (second.build_id,),
+        ).fetchone() == (0,)
         ours = [first.build_id, second.build_id]
         assert conn.execute(
             "SELECT count(DISTINCT build_id) FROM core.substation WHERE build_id = ANY(%s)", (ours,)
         ).fetchone() == (2,)
+
+
+PLACE_FIELDS = ["OBJID", "AGS", "ARS", "GEN", "BEZ", "GF", "SN_L"]
+
+
+def box(
+    conn: psycopg.Connection[Any], west: float, south: float, east: float, north: float
+) -> bytes:
+    """A MultiPolygon in EPSG:25832 whose corners are given in longitude and latitude."""
+    row = conn.execute(
+        "SELECT ST_AsBinary(ST_Multi(ST_Transform(ST_MakeEnvelope(%s, %s, %s, %s, 4326), 25832)))",
+        (west, south, east, north),
+    ).fetchone()
+    assert row is not None
+    return bytes(row[0])
+
+
+def utm_box(conn: psycopg.Connection[Any], x1: float, y1: float, x2: float, y2: float) -> bytes:
+    row = conn.execute(
+        "SELECT ST_AsBinary(ST_Multi(ST_MakeEnvelope(%s, %s, %s, %s, 25832)))", (x1, y1, x2, y2)
+    ).fetchone()
+    assert row is not None
+    return bytes(row[0])
+
+
+def boundaries_zip(
+    municipalities: list[tuple[bytes, str, str, str, int]], districts: list[tuple[bytes, str, str]]
+) -> bytes:
+    """A VG250-like zip: one GeoPackage with the layers vg250_gem and vg250_krs.
+
+    A municipality is (geometry, AGS, name, OBJID, GF), a district (geometry, AGS, name).
+    """
+    scratch = io.BytesIO()
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "DE_VG250.gpkg"
+        layers = [
+            (
+                "vg250_gem",
+                [m[0] for m in municipalities],
+                [(m[3], m[1], m[1] + "0000", m[2], "Gemeinde", m[4], "02") for m in municipalities],
+            ),
+            (
+                "vg250_krs",
+                [d[0] for d in districts],
+                [(f"K{d[1]}", d[1], d[1] + "0000000", d[2], "Kreis", 4, "02") for d in districts],
+            ),
+        ]
+        for number, (layer, geometry, rows) in enumerate(layers):
+            columns = [
+                np.array([r[i] for r in rows], dtype=np.int16 if name == "GF" else object)
+                for i, name in enumerate(PLACE_FIELDS)
+            ]
+            pyogrio.raw.write(
+                path,
+                geometry=np.array(geometry, dtype=object),
+                field_data=columns,
+                fields=PLACE_FIELDS,
+                geometry_type="MultiPolygon",
+                crs="EPSG:25832",
+                driver="GPKG",
+                layer=layer,
+                append=number > 0,
+            )
+        with zipfile.ZipFile(scratch, "w") as archive:
+            archive.write(path, "vg250_ebenen_0101/DE_VG250.gpkg")
+    return scratch.getvalue()
+
+
+class BodyPublisher:
+    def __init__(self, body: bytes) -> None:
+        self.body = body
+        self.client = remote.make_client(httpx.MockTransport(self.handle))
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        headers = {"ETag": '"b1"', "Content-Length": str(len(self.body))}
+        if request.method == "HEAD":
+            return httpx.Response(200, headers=headers)
+        return httpx.Response(200, headers=headers, stream=httpx.ByteStream(self.body))
+
+
+def location_of(conn: psycopg.Connection[Any], osm_key: str) -> tuple[float, float]:
+    row = conn.execute(
+        "SELECT ST_X(location), ST_Y(location) FROM staging.osm_power_current"
+        " WHERE source_id = 'itest_source' AND osm_key = %s",
+        (osm_key,),
+    ).fetchone()
+    assert row is not None
+    return float(row[0]), float(row[1])
+
+
+def test_every_substation_gets_the_place_that_covers_it(tmp_path: Path) -> None:
+    with db.connect("app") as conn, conn.transaction(force_rollback=True):
+        prepared(conn, tmp_path)
+        # n105 lies exactly on the edge that Gamma and Delta share; n106 lies in the land part and
+        # in a water part of the same municipality; n104 lies in no municipality at all.
+        x5, y5 = location_of(conn, "n105")
+        x6, y6 = location_of(conn, "n106")
+        around_n106 = utm_box(conn, x6 - 500, y6 - 500, x6 + 500, y6 + 500)
+        municipalities = [
+            (box(conn, 9.95, 53.50, 10.05, 53.58), "02000001", "Alpha", "OBJ-a", 4),
+            (box(conn, 10.05, 53.58, 10.105, 53.605), "02000002", "Beta", "OBJ-b", 4),
+            (utm_box(conn, x5 - 900, y5 - 900, x5, y5 + 900), "02000004", "Gamma", "OBJ-g", 4),
+            (utm_box(conn, x5, y5 - 900, x5 + 900, y5 + 900), "02000003", "Delta", "OBJ-d", 4),
+            # the water part is listed first and is the one with the smaller identifier
+            (around_n106, "02000005", "EpsilonWater", "OBJ-0", 2),
+            (around_n106, "02000005", "Epsilon", "OBJ-land", 4),
+        ]
+        districts = [(box(conn, 9.9, 53.4, 10.3, 53.8), "02000", "Kreis Eins")]
+        admin = dataclasses.replace(sources.load_all()["bkg_vg250"], source_id="itest_admin")
+        sources.register(conn, admin)
+        publisher = BodyPublisher(boundaries_zip(municipalities, districts))
+        fetch.fetch_source(conn, publisher.client, admin, tmp_path)
+        load.load_source(conn, admin, tmp_path)
+        diff.diff_source(conn, admin)
+        (step,) = apply.apply_source(conn, admin).steps
+        assert step.kinds == {"district": 1, "municipality": 6}
+
+        result = core.build_substations(conn, RULES)
+        assert result.counts["with_municipality"] == 5
+        assert result.source_versions["itest_admin"] == step.version_id
+        placed = conn.execute(
+            "SELECT osm_key, municipality_key, municipality, district"
+            " FROM core.substation_current ORDER BY osm_key"
+        ).fetchall()
+        assert placed == [
+            ("n101", "02000001", "Alpha", "Kreis Eins"),
+            ("n102", "02000001", "Alpha", "Kreis Eins"),
+            ("n103", "02000002", "Beta", "Kreis Eins"),
+            ("n104", None, None, None),
+            ("n105", "02000003", "Delta", "Kreis Eins"),  # on the border: the lower key wins
+            ("n106", "02000005", "Epsilon", "Kreis Eins"),  # land comes before water
+        ]
+        # the place is part of the content, so the same inputs give the same hash again
+        assert core.build_substations(conn, RULES).content_hash == result.content_hash
+        queue = conn.execute(
+            "SELECT osm_key FROM core.review_queue WHERE municipality = 'Alpha' ORDER BY osm_key"
+        ).fetchall()
+        assert queue == [("n101",), ("n102",)]
+
+        # The register names a municipality for each unit: w1 agrees with its coordinate, w2 names
+        # Beta, about 3 km away, and w3 names a key that the boundaries do not have.
+        for unit, key in (("w1", "02000001"), ("w2", "02000002"), ("w3", "02000009")):
+            conn.execute(
+                "UPDATE staging.wind_unit SET municipality_key = %s"
+                " WHERE source_id = 'itest_source' AND unit_key = %s",
+                (key, unit),
+            )
+        measured = places.check_places(conn, RULES)
+        assert measured.municipalities == 6
+        assert measured.substations == [SubstationPlaces("itest_source", 6, 5, 5)]
+        # the state of the test source is 99, so every place found counts as "other state"
+        assert measured.wind == [WindAgreement("99", 3, 3, 1, 1, (0, 0, 0, 1, 0))]
 
 
 def test_the_queue_lists_the_decision_relevant_cases_first(tmp_path: Path) -> None:

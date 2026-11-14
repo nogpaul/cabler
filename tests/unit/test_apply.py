@@ -64,6 +64,15 @@ def test_a_source_without_the_power_theme_cannot_be_applied(make_spec: SpecFacto
         apply.apply_source(FakeConnection(None), spec)  # type: ignore[arg-type]
 
 
+def test_the_administrative_themes_have_an_applier_of_their_own(make_spec: SpecFactory) -> None:
+    for themes in (("municipality",), ("district",), ("municipality", "district")):
+        spec = make_spec(load_kind="ogr", load_themes=themes)
+        assert apply._statements_for(spec) is apply.ADMIN_STATEMENTS
+    mixed = make_spec(load_kind="ogr", load_themes=("municipality", "land_cover"))
+    with pytest.raises(ApplyError, match="administrative-area"):
+        apply._statements_for(mixed)
+
+
 def test_nothing_diffed_means_nothing_to_apply(make_spec: SpecFactory) -> None:
     spec = make_spec(load_kind="osm_pbf", load_themes=("power",))
     result = apply.apply_source(FakeConnection((7,)), spec)  # type: ignore[arg-type]

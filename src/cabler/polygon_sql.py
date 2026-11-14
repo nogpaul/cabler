@@ -205,6 +205,60 @@ WHERE source_id = %s AND valid_to_version_id IS NULL
 GROUP BY flag
 """
 
+ADMIN_LEVELS = ("municipality", "district")
+_LEVEL_LIST = ", ".join(f"'{level}'" for level in ADMIN_LEVELS)
+
+ADMIN_CLOSE_SQL = f"""
+UPDATE staging.admin_area u
+SET valid_to_version_id = %(version)s
+FROM raw.feature_change c
+WHERE c.version_id = %(version)s
+  AND c.layer IN ({_LEVEL_LIST})
+  AND c.change IN ('changed', 'removed')
+  AND u.source_id = %(source)s
+  AND u.level = c.layer
+  AND u.feature_key = c.feature_key
+  AND u.valid_to_version_id IS NULL
+"""  # noqa: S608 (the fragments are constants of this module)
+ADMIN_OPEN_SQL = f"""
+INSERT INTO staging.admin_area
+    (source_id, feature_key, valid_from_version_id, level, area_key, regional_key, name,
+     designation, land_flag, state_key, qa_flags, geom)
+SELECT %(source)s, f.feature_key, %(version)s, f.layer, f.attributes ->> 'AGS',
+       f.attributes ->> 'ARS', f.attributes ->> 'GEN', f.attributes ->> 'BEZ',
+       CASE WHEN f.attributes ->> 'GF' ~ '^[1-4]$' THEN (f.attributes ->> 'GF')::smallint END,
+       f.attributes ->> 'SN_L',
+       array_remove(ARRAY[
+           CASE WHEN f.layer = 'municipality' AND f.attributes ->> 'AGS' !~ '^[0-9]{{8}}$'
+                  OR f.layer = 'district' AND f.attributes ->> 'AGS' !~ '^[0-9]{{5}}$'
+                  OR f.attributes ->> 'AGS' IS NULL THEN 'key_malformed' END,
+           CASE WHEN f.attributes ->> 'GEN' IS NULL THEN 'name_missing' END,
+           {_GEOMETRY_FLAGS}
+       ], NULL),
+       g.geom
+FROM raw.feature_change c
+JOIN raw.feature f
+  ON f.version_id = c.version_id AND f.layer = c.layer AND f.feature_key = c.feature_key{_GEOMETRY}
+WHERE c.version_id = %(version)s
+  AND c.layer IN ({_LEVEL_LIST})
+  AND c.change IN ('added', 'changed')
+"""  # noqa: S608 (the fragments are constants of this module)
+ADMIN_CURRENT_SQL = """
+SELECT count(*) FROM staging.admin_area
+WHERE source_id = %s AND valid_to_version_id IS NULL
+"""
+ADMIN_KINDS_SQL = """
+SELECT level, count(*) FROM staging.admin_area
+WHERE source_id = %s AND valid_to_version_id IS NULL
+GROUP BY level
+"""
+ADMIN_FLAGS_SQL = """
+SELECT flag, count(*)
+FROM staging.admin_area, unnest(qa_flags) AS flag
+WHERE source_id = %s AND valid_to_version_id IS NULL
+GROUP BY flag
+"""
+
 PROTECTED_CURRENT_SQL = """
 SELECT count(*) FROM staging.protected_area
 WHERE source_id = %s AND valid_to_version_id IS NULL

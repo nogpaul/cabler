@@ -63,10 +63,12 @@ class RuleSet:
     audit_share: float = 0.05
     audit_min: int = 30
     audit_seed: str = "cabler-audit-1"
+    admin_source: str = "bkg_vg250"  # the boundaries that give every substation its place
 
     def parameters(self) -> dict[str, Any]:
         return {
             "states": dict(sorted(self.states.items())),
+            "admin_source": self.admin_source,
             "high_voltage_v": self.high_voltage_v,
             "reach_m": self.reach_m,
             "wind_statuses": list(self.wind_statuses),
@@ -77,7 +79,7 @@ class RuleSet:
         }
 
 
-DEFAULT_RULES = RuleSet(version="1.0.0", states={"osm_nrw": "05", "osm_hamburg": "02"})
+DEFAULT_RULES = RuleSet(version="1.1.0", states={"osm_nrw": "05", "osm_hamburg": "02"})
 
 
 @dataclass(frozen=True)
@@ -152,6 +154,9 @@ class Row:
     audit_sample: bool
     location_ewkb: bytes
     location_wkt: str
+    municipality_key: str | None = None  # the place, looked up from the position
+    municipality: str | None = None
+    district: str | None = None
 
     def stable(self) -> list[Any]:
         """The content of the row without any number the database generated."""
@@ -176,6 +181,9 @@ class Row:
             self.impact,
             self.audit_sample,
             self.location_wkt,
+            self.municipality_key,
+            self.municipality,
+            self.district,
         ]
 
 
@@ -241,7 +249,8 @@ WITH sub AS MATERIALIZED (
 )
 SELECT s.feature_id, s.source_id, s.layer, s.osm_key, s.name, s.operator, s.substation_type,
        s.voltage_v, s.hint, s.decision, s.decision_id,
-       ST_AsEWKB(s.location), ST_AsText(s.location, 3), r.in_reach, r.impact
+       ST_AsEWKB(s.location), ST_AsText(s.location, 3), r.in_reach, r.impact,
+       m.area_key, m.name, k.name
 FROM sub s
 CROSS JOIN LATERAL (
     SELECT count(*) AS in_reach,
@@ -250,7 +259,28 @@ CROSS JOIN LATERAL (
            ) AS impact
     FROM nearest n WHERE ST_DWithin(s.location, n.geom, %(reach)s)
 ) r
+-- The place: the municipality that covers the point. A point on a border is covered by both
+-- neighbours, and a point in the water part of a municipality by a water row, so land comes first
+-- and the lowest key breaks a tie; the result never depends on the order of the rows.
+LEFT JOIN LATERAL (
+    SELECT a.area_key, a.name
+    FROM staging.admin_area_as_of(%(admin_source)s, %(admin_version)s) a
+    WHERE a.level = 'municipality' AND a.geom IS NOT NULL AND ST_Covers(a.geom, s.location)
+    ORDER BY (a.land_flag IS NOT DISTINCT FROM 4) DESC, a.area_key
+    LIMIT 1
+) m ON true
+LEFT JOIN LATERAL (
+    SELECT d.name
+    FROM staging.admin_area_as_of(%(admin_source)s, %(admin_version)s) d
+    WHERE m.area_key IS NOT NULL AND d.level = 'district' AND d.area_key = left(m.area_key, 5)
+    ORDER BY (d.land_flag IS NOT DISTINCT FROM 4) DESC, d.feature_key
+    LIMIT 1
+) k ON true
 ORDER BY s.layer, s.osm_key
+"""
+# The newest applied snapshot of the boundaries; none means that the build has no places.
+ADMIN_VERSION_SQL = """
+SELECT max(version_id) FROM meta.source_version WHERE source_id = %s AND status = 'applied'
 """
 # The newest version that opened or closed a unit, so that retiring units changes it too.
 WIND_VERSION_SQL = """
@@ -265,9 +295,10 @@ INSERT_SQL = """
 INSERT INTO core.substation
     (build_id, source_id, layer, osm_key, feature_id, name, operator, substation_type, voltage_v,
      voltage_source, hint, decision, decision_id, in_strict, in_likely, in_inclusive, reason, tier,
-     wind_units_in_reach, impact, audit_sample, location)
+     wind_units_in_reach, impact, audit_sample, location, municipality_key, municipality,
+     district)
 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-        ST_GeomFromEWKB(%s))
+        ST_GeomFromEWKB(%s), %s, %s, %s)
 """
 
 
@@ -293,11 +324,18 @@ def register_rules(conn: psycopg.Connection[Any], rules: RuleSet) -> int:
 
 
 def _facts(
-    conn: psycopg.Connection[Any], rules: RuleSet, source_id: str, state: str, version: int
+    conn: psycopg.Connection[Any],
+    rules: RuleSet,
+    source_id: str,
+    state: str,
+    version: int,
+    admin_version: int | None = None,
 ) -> list[Row]:
     params = {
         "source": source_id,
         "version": version,
+        "admin_source": rules.admin_source,
+        "admin_version": admin_version,
         "high": rules.high_voltage_v,
         "state": state,
         "statuses": list(rules.wind_statuses),
@@ -328,6 +366,9 @@ def _facts(
                 audit_sample=False,
                 location_ewkb=bytes(f[11]),
                 location_wkt=str(f[12]),
+                municipality_key=f[15],
+                municipality=f[16],
+                district=f[17],
             )
         )
     return rows
@@ -348,6 +389,7 @@ def _counts(rows: list[Row]) -> dict[str, int]:
         "likely": sum(r.classification.in_likely for r in rows),
         "inclusive": sum(r.classification.in_inclusive for r in rows),
         "audit_sample": sum(r.audit_sample for r in rows),
+        "with_municipality": sum(r.municipality_key is not None for r in rows),
     }
     for tier in ("A", "B", "C", "D"):
         counts[f"tier_{tier}"] = sum(r.tier == tier for r in rows)
@@ -379,6 +421,9 @@ def _insert_values(build_id: int, r: Row) -> tuple[Any, ...]:
         r.impact,
         r.audit_sample,
         r.location_ewkb,
+        r.municipality_key,
+        r.municipality,
+        r.district,
     )
 
 
@@ -408,9 +453,14 @@ def build_substations(conn: psycopg.Connection[Any], rules: RuleSet = DEFAULT_RU
     with conn.transaction():
         versions = validated_versions(conn, rules)
         rule_set_id = register_rules(conn, rules)
+        boundaries = conn.execute(ADMIN_VERSION_SQL, (rules.admin_source,)).fetchone()
+        admin_version = int(boundaries[0]) if boundaries and boundaries[0] is not None else None
+        versions[rules.admin_source] = admin_version or 0
         rows: list[Row] = []
         for source_id in sorted(rules.states):
-            rows += _facts(conn, rules, source_id, rules.states[source_id], versions[source_id])
+            rows += _facts(
+                conn, rules, source_id, rules.states[source_id], versions[source_id], admin_version
+            )
         # the newest decision that this build applied, read from the same rows it used
         decisions_through = max((r.decision_id or 0 for r in rows), default=0)
         chosen = audit_sample(rows, rules)

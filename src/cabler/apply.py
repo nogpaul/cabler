@@ -229,6 +229,14 @@ PROTECTED_STATEMENTS = _Statements(
     polygon_sql.PROTECTED_FLAGS_SQL,
     "ANALYZE staging.protected_area",
 )
+ADMIN_STATEMENTS = _Statements(
+    polygon_sql.ADMIN_CLOSE_SQL,
+    polygon_sql.ADMIN_OPEN_SQL,
+    polygon_sql.ADMIN_CURRENT_SQL,
+    polygon_sql.ADMIN_KINDS_SQL,
+    polygon_sql.ADMIN_FLAGS_SQL,
+    "ANALYZE staging.admin_area",
+)
 PARCEL_STATEMENTS = _Statements(
     polygon_sql.PARCEL_CLOSE_SQL,
     polygon_sql.PARCEL_OPEN_SQL,
@@ -261,10 +269,12 @@ def _statements_for(spec: SourceSpec) -> _Statements:
         return PARCEL_NAS_STATEMENTS
     if spec.load_kind == "ogr" and themes and themes <= set(polygon_sql.PROTECTED_KINDS):
         return PROTECTED_STATEMENTS
+    if spec.load_kind == "ogr" and themes and themes <= set(polygon_sql.ADMIN_LEVELS):
+        return ADMIN_STATEMENTS
     msg = (
         f"{spec.source_id}: no applier for this source; known: OSM sources with the power "
-        "theme, MaStR sources with the wind theme, land cover, parcels, and the protected-area "
-        "themes"
+        "theme, MaStR sources with the wind theme, land cover, parcels, the protected-area "
+        "themes and the administrative-area themes"
     )
     raise ApplyError(msg)
 
