@@ -56,6 +56,15 @@ def test_an_empty_state_shows_a_dash_not_a_made_up_share() -> None:
     assert line.split()[:4] == ["99", "0", "0", "-"]
 
 
+def test_units_without_a_key_are_shown_apart_from_keys_the_boundaries_lack() -> None:
+    result = Places(5, [], [WindAgreement("05", 10, 9, 5, 1, (1, 0, 0, 0, 0), 3)])
+    lines = places.format_report(result)
+    line = next(x for x in lines if x.strip().startswith("05"))
+    assert line.split()[-2:] == ["1", "3"]  # key unknown, no key
+    header = next(x for x in lines if "key unknown" in x and "units" in x)
+    assert header.endswith("no key")
+
+
 class Rows:
     def __init__(self, row: tuple[Any, ...] | None) -> None:
         self.row = row
@@ -79,7 +88,7 @@ class Database:
             return Rows((100, 99, 2))
         if query == places.WIND_SQL:
             self.seen.append(params)
-            return Rows((50, 48, 40, 1, 2, 3, 2, 1, 0))
+            return Rows((50, 48, 40, 1, 2, 3, 2, 1, 0, 4))
         raise AssertionError(query)
 
 
@@ -91,7 +100,7 @@ def test_the_check_reads_substations_and_units_per_source() -> None:
     result = places.check_places(db, RULES)  # type: ignore[arg-type]
     assert result.municipalities == 11_094
     assert result.substations == [SubstationPlaces("osm_nrw", 100, 99, 2)]
-    assert result.wind == [WindAgreement("05", 50, 48, 40, 1, (2, 3, 2, 1, 0))]
+    assert result.wind == [WindAgreement("05", 50, 48, 40, 1, (2, 3, 2, 1, 0), 4)]
     substations, wind = db.seen
     assert substations == {"source": "osm_nrw", "state": "05"}
     assert wind["admin"] == "bkg_vg250"
