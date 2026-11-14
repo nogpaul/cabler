@@ -18,6 +18,7 @@ Usage: python -m cabler.pipeline list
        python -m cabler.pipeline decide {dev,staging,production} SOURCE LAYER KEY DECISION
            --reason TEXT --reviewer NAME
        python -m cabler.pipeline evaluate {dev,staging,production}
+       python -m cabler.pipeline places {dev,staging,production}
 """
 
 from __future__ import annotations
@@ -38,6 +39,7 @@ from cabler import (
     evaluate,
     fetch,
     load,
+    places,
     remote,
     sources,
     terrain,
@@ -363,6 +365,18 @@ def _run_evaluate(env: str) -> int:
     return 0
 
 
+def _run_places(env: str) -> int:
+    with db.connect("app", environ={"CABLER_ENV": env}) as conn:
+        try:
+            result = places.check_places(conn)
+        except CoreError as exc:
+            print(f"ERROR places: {exc}", file=sys.stderr)
+            return 1
+    for line in places.format_report(result):
+        print(line)
+    return 0
+
+
 def _run_decide(env: str, args: argparse.Namespace) -> int:
     with db.connect("app", environ={"CABLER_ENV": env}) as conn:
         try:
@@ -494,6 +508,8 @@ def main(argv: list[str] | None = None) -> int:
     queue_cmd.add_argument("--limit", type=int, default=20, help="rows to show")
     evaluate_cmd = commands.add_parser("evaluate", help="measure the hint rules")
     evaluate_cmd.add_argument("name", choices=NAMES)
+    places_cmd = commands.add_parser("places", help="measure the places of substations and units")
+    places_cmd.add_argument("name", choices=NAMES)
     decide_cmd = commands.add_parser("decide", help="record a decision about one substation")
     decide_cmd.add_argument("name", choices=NAMES)
     decide_cmd.add_argument("source", help="source id, for example osm_nrw")
@@ -555,6 +571,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.action == "evaluate":
         return _run_evaluate(args.name)
+
+    if args.action == "places":
+        return _run_places(args.name)
 
     if args.action == "decide":
         return _run_decide(args.name, args)

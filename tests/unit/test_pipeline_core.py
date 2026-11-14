@@ -10,6 +10,7 @@ import pytest
 from cabler import core, pipeline
 from cabler.core import CoreError
 from cabler.evaluate import Cell, Evaluation
+from cabler.places import Places, SubstationPlaces, WindAgreement
 
 
 @pytest.fixture(autouse=True)
@@ -182,3 +183,30 @@ def test_a_refused_evaluation_exits_with_one(
     code, _, err = run(["evaluate", "dev"], capsys)
     assert code == 1
     assert "ERROR evaluate: osm_nrw: no validated snapshot" in err
+
+
+def test_places_prints_the_measurements(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    result = Places(
+        11_094,
+        [SubstationPlaces("osm_nrw", 100, 99, 2)],
+        [WindAgreement("05", 200, 198, 160, 0, (5, 10, 12, 10, 3))],
+    )
+    monkeypatch.setattr(pipeline.places, "check_places", lambda conn: result)
+    code, out, _ = run(["places", "dev"], capsys)
+    assert code == 0
+    assert "11,094 municipalities" in out
+    assert "80.0%" in out
+
+
+def test_places_without_boundaries_exit_with_one(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def refuse(conn: Any) -> Any:
+        raise CoreError("bkg_vg250: no boundaries are applied; run: fetch, load, diff, apply")
+
+    monkeypatch.setattr(pipeline.places, "check_places", refuse)
+    code, _, err = run(["places", "dev"], capsys)
+    assert code == 1
+    assert "ERROR places: bkg_vg250: no boundaries are applied" in err
