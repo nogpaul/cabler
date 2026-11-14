@@ -31,6 +31,8 @@ decide about one (ADR-0023) cannot tell where it is. Two ways to give it a place
 - **`make places`** measures the result: how many substations have a place, how many lie in another
   state than their extract, and how well the municipality that MaStR names for a wind unit agrees
   with the municipality that covers its coordinate, with the distance for the ones that do not.
+  A unit without a registered key, or with a key that the boundaries lack, is counted apart and
+  never as agreeing.
 
 ## Consequences
 - On the real data 20,077 of 20,092 substations have a place. The 15 without lie at the Belgian and

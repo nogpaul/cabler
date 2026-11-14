@@ -41,6 +41,9 @@ the statuses *in operation* and *planned*, without a finding on the coordinate):
 The distance columns count the units whose coordinate lies outside the municipality that the
 register names, by how far the coordinate is from it. Every key of the register exists in the
 boundaries, so out-of-date keys after a merger of municipalities do not explain the differences.
+The report counts two further cases apart, and neither occurs here: a unit whose registered key is
+not in the boundaries ("key unknown") and a unit for which the register names no municipality at
+all ("no key"). Neither counts as agreeing, not even when its coordinate lies in no municipality.
 
 ## What this says, and what it does not
 
