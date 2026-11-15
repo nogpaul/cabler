@@ -6,7 +6,7 @@ PY := .venv/bin/python
 ENV ?= dev
 
 .DEFAULT_GOAL := help
-.PHONY: help setup env db-up db-down db-psql db-reset migrate migrate-status sources register updates fetch load diff apply tiles catalogue validate review core windcore queue evaluate places check test-int lock
+.PHONY: help setup env db-up db-down db-psql db-reset migrate migrate-status sources register updates fetch load diff apply tiles catalogue validate review core windcore exit-check queue evaluate places check test-int lock
 
 help: ## show this help
 > @grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
@@ -82,6 +82,9 @@ places: ## measure the places of substations and wind units against the boundari
 
 windcore: ## build the core wind units: position quality and scenarios ($(ENV))
 > $(PY) -m cabler.pipeline windcore $(ENV)
+
+exit-check: ## judge every data layer, store the report, fail on an error ($(ENV))
+> $(PY) -m cabler.pipeline exitcheck $(ENV)
 
 queue: ## substations a person should look at: make queue [TIER=A] [LIMIT=20] ($(ENV))
 > $(PY) -m cabler.pipeline queue $(ENV) $(if $(TIER),--tier $(TIER),) $(if $(LIMIT),--limit $(LIMIT),)

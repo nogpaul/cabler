@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from cabler import core, pipeline, windcore
+from cabler import core, layercheck, pipeline, windcore
 from cabler.core import CoreError
 from cabler.evaluate import Cell, Evaluation
 from cabler.places import Places, SubstationPlaces, WindAgreement
@@ -234,9 +234,16 @@ def test_windcore_prints_the_scenarios_and_the_position_classes(
         "status_retired": 500,
     }
     result = windcore.WindBuildResult(4, "cd" * 32, counts, {"osm_nrw": 397, "wind_units": 12})
-    monkeypatch.setattr(pipeline.windcore, "build_wind_units", lambda conn: result)
+    seen: dict[str, Any] = {}
+
+    def build(conn: Any, **kwargs: Any) -> windcore.WindBuildResult:
+        seen.update(kwargs)
+        return result
+
+    monkeypatch.setattr(pipeline.windcore, "build_wind_units", build)
     code, out, _ = run(["windcore", "dev"], capsys)
     assert code == 0
+    assert seen == {"require_snapshot": True}  # the command always builds from one snapshot
     assert "wind units build 4  hash cdcdcdcdcdcdcdcd" in out
     assert "strict 4,000, likely 5,900, inclusive 6,100" in out
     assert "doubtful 300" in out
@@ -245,10 +252,45 @@ def test_windcore_prints_the_scenarios_and_the_position_classes(
 def test_a_refused_windcore_build_exits_with_one(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    def refuse(conn: Any) -> Any:
+    def refuse(conn: Any, **kwargs: Any) -> Any:
         raise CoreError("osm_nrw: no validated snapshot; run validate first")
 
     monkeypatch.setattr(pipeline.windcore, "build_wind_units", refuse)
     code, _, err = run(["windcore", "dev"], capsys)
     assert code == 1
     assert "ERROR windcore: osm_nrw: no validated snapshot" in err
+
+
+def test_exitcheck_prints_the_report_stores_it_and_exits_with_the_verdict(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ok = layercheck.CheckResult("parcel", "alkis_nrw", "geometry_invalid", "ok", 0, 100)
+    flag = layercheck.CheckResult("parcel", "alkis_nrw", "flag:area_mismatch", "warning", 14, 100)
+    seen: dict[str, Any] = {}
+
+    def run_checks(conn: Any, **kwargs: Any) -> layercheck.Report:
+        seen["options"] = kwargs
+        return layercheck.Report((ok, flag))
+
+    monkeypatch.setattr(pipeline.layercheck, "run_checks", run_checks)
+    monkeypatch.setattr(pipeline.layercheck, "store_report", lambda conn, report, options: 7)
+    code, out, _ = run(["exitcheck", "dev", "--fast", "--no-files"], capsys)
+    assert code == 0  # a warning never fails the check
+    assert (seen["options"]["validity"], seen["options"]["files"]) == (False, False)
+    assert seen["options"]["raw"].parts[-2:] == ("dev", "raw")  # the snapshots of the environment
+    assert "WARNING  flag:area_mismatch" in out
+    assert "exit check PASSED: 0 errors, 1 warnings" in out
+    assert "stored as check run 7" in out
+
+
+def test_exitcheck_with_an_error_exits_with_one(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    bad = layercheck.CheckResult("parcel", "alkis_nrw", "crs_not_25832", "error", 3, 100)
+    monkeypatch.setattr(
+        pipeline.layercheck, "run_checks", lambda conn, **kwargs: layercheck.Report((bad,))
+    )
+    monkeypatch.setattr(pipeline.layercheck, "store_report", lambda conn, report, options: 8)
+    code, out, _ = run(["exitcheck", "dev"], capsys)
+    assert code == 1
+    assert "exit check FAILED: 1 errors, 0 warnings" in out
