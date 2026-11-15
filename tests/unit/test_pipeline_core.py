@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from cabler import core, pipeline
+from cabler import core, pipeline, windcore
 from cabler.core import CoreError
 from cabler.evaluate import Cell, Evaluation
 from cabler.places import Places, SubstationPlaces, WindAgreement
@@ -210,3 +210,45 @@ def test_places_without_boundaries_exit_with_one(
     code, _, err = run(["places", "dev"], capsys)
     assert code == 1
     assert "ERROR places: bkg_vg250: no boundaries are applied" in err
+
+
+def test_windcore_prints_the_scenarios_and_the_position_classes(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    counts = {
+        "units": 6_700,
+        "strict": 4_000,
+        "likely": 5_900,
+        "inclusive": 6_100,
+        "with_osm_turbine": 3_800,
+        "with_place": 6_600,
+        "osm_turbines": 4_425,
+        "osm_turbines_without_unit": 355,
+        "class_confirmed": 3_800,
+        "class_plausible": 2_000,
+        "class_doubtful": 300,
+        "class_invalid": 5,
+        "class_unlocated": 595,
+        "status_existing": 4_100,
+        "status_planned": 2_100,
+        "status_retired": 500,
+    }
+    result = windcore.WindBuildResult(4, "cd" * 32, counts, {"osm_nrw": 397, "wind_units": 12})
+    monkeypatch.setattr(pipeline.windcore, "build_wind_units", lambda conn: result)
+    code, out, _ = run(["windcore", "dev"], capsys)
+    assert code == 0
+    assert "wind units build 4  hash cdcdcdcdcdcdcdcd" in out
+    assert "strict 4,000, likely 5,900, inclusive 6,100" in out
+    assert "doubtful 300" in out
+
+
+def test_a_refused_windcore_build_exits_with_one(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def refuse(conn: Any) -> Any:
+        raise CoreError("osm_nrw: no validated snapshot; run validate first")
+
+    monkeypatch.setattr(pipeline.windcore, "build_wind_units", refuse)
+    code, _, err = run(["windcore", "dev"], capsys)
+    assert code == 1
+    assert "ERROR windcore: osm_nrw: no validated snapshot" in err
