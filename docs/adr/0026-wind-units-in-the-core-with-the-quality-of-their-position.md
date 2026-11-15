@@ -4,9 +4,8 @@ Status: accepted · Date: 2026-11-15
 
 ## Context
 Routing starts at wind units. The register (MaStR) gives the position of every unit, but nobody
-checked it: 127 of the 6,834 units of NRW and Hamburg have none, 17 are flagged as impossible,
-and the municipality that the
-register names for a unit disagrees with the municipality that covers its coordinate for 16.5% of
+checked it: 112 of the 6,329 existing and planned units of NRW and Hamburg have none, 14 are
+flagged as impossible, and the municipality that the register names for a unit disagrees with the municipality that covers its coordinate for 16.5% of
 the NRW units (ADR-0025). Two choices were considered for a coordinate that looks wrong:
 
 - **Drop it, or move the unit to the OSM turbine nearby.** Rejected. Dropping loses real turbines
@@ -37,12 +36,19 @@ the NRW units (ADR-0025). Two choices were considered for a coordinate that look
   from the same inputs gives the same hash.
 - **A key the boundaries lack proves nothing.** A unit whose registered key is not in the boundaries
   has no registered distance and is judged by the other evidence only.
+- **One snapshot.** The build reads inside a REPEATABLE READ transaction (unless the caller has
+  opened a transaction, which then decides), so the units, the turbines and the recorded input
+  versions describe the same state of the database.
+- **Distances are rounded to 0.1 m** before the limits are tested, so a limit is exact to 5 cm.
+- **States.** A state is built from the OSM sources of the rule set, or named in `wind_states`
+  when it has no OSM extract; the rule set names at least one state.
 - **`make windcore`** builds it. OSM turbines without a unit within reach are counted, not guessed.
 
 ## Consequences
-- On the real data (NRW and Hamburg, 6,834 units): 3,955 units are in strict, 6,091 in likely and
-  6,203 in inclusive. 3,885 positions are confirmed by an OSM turbine, 246 are doubtful, 17 invalid,
-  127 unlocated.
+- On the real data (NRW and Hamburg) 6,329 units are existing or planned, and 505 retired units are
+  stored but in no scenario. Of the 6,329, 3,813 positions are confirmed by an OSM turbine, 2,278
+  are plausible, 112 doubtful, 14 invalid and 112 unlocated. The scenarios hold 3,955 units
+  (strict), 6,091 (likely) and 6,203 (inclusive).
 - Of the units that the register places more than 2 km from their named municipality, 567 stand at
   an OSM turbine. For them the coordinate is right and the registered **key** is the weak side.
   Taken together with ADR-0025 this corrects the reading there: the key is not a reliable test of a
@@ -51,8 +57,14 @@ the NRW units (ADR-0025). Two choices were considered for a coordinate that look
 - 2,278 positions (mostly planned units, which have no turbine to find yet) are plausible without
   any independent check. The share of confirmed positions is the measure of the evidence, and the
   scenarios let a later analysis ask what changes if they are wrong.
-- OSM covers only NRW and Hamburg in this data, so confirmation works for those two states. The
-  same code builds the units of any state whose OSM extract is a source of the rule set; without
-  one, every position is at best plausible.
+- OSM covers only NRW and Hamburg in this data, so confirmation works for those two states. A state
+  without an OSM extract is built all the same (`wind_states`); nothing can confirm its positions,
+  so every position there is at best plausible.
 - The unmatched OSM turbines (402) are candidates for units that the register lacks or places
-  wrongly; they are counted, and reviewing them is a later step.
+  wrongly; they are counted, once even when two extracts hold the same OSM object, and reviewing
+  them is a later step.
+- The register's units are not validated the way the OSM snapshots are: no verdict exists for
+  them yet. A gate for them belongs with the validation reports.
+- The lookup of the nearest turbine compares every unit with every turbine (7 s for NRW and
+  Hamburg). A country-wide build needs an index or a grid; that is a scale item for the hardening
+  phase.
