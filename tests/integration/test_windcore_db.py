@@ -24,6 +24,7 @@ import psycopg
 import pytest
 
 from cabler import apply, db, diff, fetch, load, sources, windcore
+from cabler.core import CoreError
 from cabler.windcore import WindRules
 from itest_helpers import BodyPublisher, boundaries_zip, box, make_spec, prepared
 
@@ -253,7 +254,8 @@ def test_a_state_without_an_osm_extract_is_built_with_nothing_to_confirm_it(
         stage_units_turbines_and_boundaries(conn, tmp_path)
         rules = dataclasses.replace(RULES, version="0.0.3", states={}, wind_states=("99",))
         result = windcore.build_wind_units(conn, rules)
-        assert set(result.source_versions) == {"itest_admin", "wind_units"}
+        # the register of the units is judged like an OSM source; here it is the same source
+        assert set(result.source_versions) == {"itest_source", "itest_admin", "wind_units"}
         assert result.counts["units"] == 9
         assert result.counts["osm_turbines"] == 0
         assert result.counts["class_confirmed"] == 0
@@ -300,6 +302,16 @@ def test_the_build_transaction_is_repeatable_read_unless_one_is_open() -> None:
             with windcore.repeatable_read(conn), conn.transaction():
                 level = conn.execute("SHOW transaction_isolation").fetchone()
                 assert level == ("read committed",)  # the open transaction decides
+
+
+def test_a_rules_version_cannot_be_reused_with_other_parameters(tmp_path: Path) -> None:
+    with db.connect("app") as conn, conn.transaction(force_rollback=True):
+        stage_units_turbines_and_boundaries(conn, tmp_path)
+        windcore.build_wind_units(conn, RULES)
+        other = dataclasses.replace(RULES, confirm_m=30)  # the same version, other parameters
+        with pytest.raises(CoreError, match="was built with other parameters"), conn.transaction():
+            windcore.build_wind_units(conn, other)
+        assert windcore.build_wind_units(conn, RULES).isolation == "read committed"  # the outer one
 
 
 def test_the_application_role_cannot_change_a_build(tmp_path: Path) -> None:
