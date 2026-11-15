@@ -69,6 +69,32 @@ REPAIRED_SQL = """
 SELECT count(*) FROM staging.osm_power_as_of(%s, %s) WHERE 'geometry_repaired' = ANY(qa_flags)
 """
 
+WIND_TOTAL_SQL = "SELECT count(*) FROM staging.wind_unit_as_of(%s, %s)"
+WIND_BEFORE_SQL = """
+SELECT count(*) FROM staging.wind_unit
+WHERE source_id = %s AND valid_from_version_id < %s
+  AND (valid_to_version_id IS NULL OR valid_to_version_id >= %s)
+"""
+WIND_REMOVED_SQL = """
+SELECT count(*) FROM staging.wind_unit f
+WHERE f.source_id = %s AND f.valid_to_version_id = %s
+  AND NOT EXISTS (
+      SELECT 1 FROM staging.wind_unit g
+      WHERE g.source_id = f.source_id AND g.unit_key = f.unit_key AND g.valid_from_version_id = %s)
+"""
+WIND_FLAGS_SQL = """
+SELECT flag, count(*) FROM staging.wind_unit_as_of(%s, %s), unnest(qa_flags) AS flag GROUP BY flag
+"""
+# (warning above, error above) as a share of all units of the snapshot
+WIND_FLAG_LIMITS = {
+    "coordinate_missing": (0.02, 0.30),
+    "coordinate_placeholder": (0.001, 0.05),
+    "coordinate_outside_germany": (0.001, 0.05),
+    "coordinate_outside_state": (0.001, 0.05),
+    "capacity_missing": (0.005, 0.05),
+    "capacity_implausible": (0.005, 0.05),
+}
+
 LINE_HINT_SQL = """
 INSERT INTO staging.validation_finding (version_id, rule, severity, feature_id, detail)
 SELECT %(version)s, 'voltage_hint_line', 'info', u.feature_id,
@@ -275,7 +301,60 @@ def validate_version(
     conn.execute(LINE_HINT_SQL, params)
     conn.execute(TYPE_HINT_SQL, params)
     conn.execute(CONFLICT_SQL, params)
+    return _conclude(conn, source_id, version_id, total, problems)
 
+
+def _wind_rules(
+    conn: psycopg.Connection[Any], source_id: str, version_id: int
+) -> tuple[int, list[str]]:
+    """The snapshot-level rules for the wind units of the register."""
+    problems: list[str] = []
+    total = _scalar(conn, WIND_TOTAL_SQL, (source_id, version_id))
+    if total == 0:
+        problems.append(
+            _finding(conn, version_id, "empty_state", "error", "no wind units in this snapshot")
+        )
+    before = _scalar(conn, WIND_BEFORE_SQL, (source_id, version_id, version_id))
+    removed = _scalar(conn, WIND_REMOVED_SQL, (source_id, version_id, version_id))
+    if removal_severity(before, removed):
+        message = (
+            f"{removed:,} of {before:,} units disappeared "
+            f"({removed / before:.0%}; limit {MAX_REMOVED_SHARE:.0%})"
+        )
+        problems.append(
+            _finding(
+                conn, version_id, "removal_share", "error", message, before=before, removed=removed
+            )
+        )
+    flags = {
+        str(flag): int(count)
+        for flag, count in conn.execute(WIND_FLAGS_SQL, (source_id, version_id)).fetchall()
+    }
+    for flag, (warn, error) in WIND_FLAG_LIMITS.items():
+        count = flags.get(flag, 0)
+        severity = share_severity(count, total, warn=warn, error=error)
+        if severity:
+            message = f"{count:,} of {total:,} units: {flag}"
+            problems.append(_finding(conn, version_id, flag, severity, message, count=count))
+    return total, problems
+
+
+def validate_wind_version(
+    conn: psycopg.Connection[Any], source_id: str, version_id: int
+) -> ValidateStep:
+    """Judge one applied snapshot of the wind units. The caller owns the transaction."""
+    total, problems = _wind_rules(conn, source_id, version_id)
+    return _conclude(conn, source_id, version_id, total, problems)
+
+
+def _conclude(
+    conn: psycopg.Connection[Any],
+    source_id: str,
+    version_id: int,
+    total: int,
+    problems: list[str],
+) -> ValidateStep:
+    """Count the findings of a snapshot, store the verdict and return the step."""
     rules: dict[str, int] = {}
     errors = warnings = 0
     for rule, severity, count in conn.execute(SUMMARY_SQL, (version_id,)).fetchall():
@@ -299,9 +378,14 @@ def validate_version(
 
 def validate_source(conn: psycopg.Connection[Any], spec: SourceSpec) -> ValidateResult:
     """Run the validate stage for one source: every applied snapshot without a verdict."""
-    if spec.load_kind != "osm_pbf" or "power" not in spec.load_themes:
+    if spec.load_kind == "osm_pbf" and "power" in spec.load_themes:
+        judge = validate_version
+    elif spec.load_kind == "mastr_xml" and "wind" in spec.load_themes:
+        judge = validate_wind_version
+    else:
         msg = (
-            f"{spec.source_id}: no validator for this source; only OSM sources with the power theme"
+            f"{spec.source_id}: no validator for this source; only OSM sources with the power "
+            "theme and MaStR sources with the wind theme"
         )
         raise ValidateError(msg)
     with runs.recorded(conn, "validate", spec.source_id) as run:
@@ -309,7 +393,7 @@ def validate_source(conn: psycopg.Connection[Any], spec: SourceSpec) -> Validate
         steps: list[ValidateStep] = []
         for version_id in pending:
             with conn.transaction():
-                steps.append(validate_version(conn, spec.source_id, version_id))
+                steps.append(judge(conn, spec.source_id, version_id))
         if steps:
             result = ValidateResult(spec.source_id, "validated", steps[-1].version_id, tuple(steps))
         else:

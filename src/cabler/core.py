@@ -441,6 +441,9 @@ def validated_versions(conn: psycopg.Connection[Any], rules: RuleSet) -> dict[st
 
 def validated_sources(conn: psycopg.Connection[Any], source_ids: Iterable[str]) -> dict[str, int]:
     """The newest validated snapshot of each of the given sources (none is allowed)."""
+    if isinstance(source_ids, str):
+        msg = "source_ids must be a collection of source ids, not one string"
+        raise TypeError(msg)
     versions: dict[str, int] = {}
     for source_id in sorted(source_ids):
         verdict = conn.execute(VERDICT_SQL, (source_id,)).fetchone()

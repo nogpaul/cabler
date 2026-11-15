@@ -102,7 +102,10 @@ def repeatable_read(conn: psycopg.Connection[Any]) -> Iterator[None]:
     try:
         yield
     finally:
-        conn.isolation_level = before
+        # a connection that is broken or still in a failed transaction cannot be changed, and
+        # trying would hide the error that brought it there
+        if conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE:
+            conn.isolation_level = before
 
 
 @dataclass(frozen=True)
@@ -313,9 +316,16 @@ SELECT count(*),
 FROM single
 """
 )
+# A rules version names one set of parameters, as for the substations: the same version with other
+# parameters is refused.
+RULES_SQL = (
+    "SELECT parameters FROM core.wind_build WHERE rules_version = %s ORDER BY wind_build_id LIMIT 1"
+)
+ISOLATION_SQL = "SHOW transaction_isolation"
 BUILD_SQL = """
-INSERT INTO core.wind_build (rules_version, parameters, source_versions, counts, content_hash)
-VALUES (%s, %s::jsonb, %s::jsonb, %s::jsonb, %s) RETURNING wind_build_id
+INSERT INTO core.wind_build
+    (rules_version, parameters, source_versions, counts, content_hash, isolation)
+VALUES (%s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s) RETURNING wind_build_id
 """
 INSERT_SQL = """
 INSERT INTO core.wind_unit
@@ -454,19 +464,38 @@ class WindBuildResult:
     content_hash: str
     counts: dict[str, int]
     source_versions: dict[str, int]
+    isolation: str = "unknown"
 
 
 def build_wind_units(
-    conn: psycopg.Connection[Any], rules: WindRules = DEFAULT_WIND_RULES
+    conn: psycopg.Connection[Any],
+    rules: WindRules = DEFAULT_WIND_RULES,
+    *,
+    require_snapshot: bool = False,
 ) -> WindBuildResult:
-    """Build the wind units of the core from the register and the newest validated OSM snapshots."""
+    """Build the wind units of the core from the register and the newest validated snapshots.
+
+    The isolation level of the build is recorded. With ``require_snapshot`` a build that did not get
+    one snapshot (because the caller had a transaction open at a lower level) is refused.
+    """
     if not rules.all_states:
         msg = "the rule set names no state"
         raise CoreError(msg)
     with repeatable_read(conn), conn.transaction():
-        # the sources are validated exactly as for the substations: no verdict or a quarantined
-        # snapshot stops the build
-        versions = core.validated_sources(conn, rules.states)
+        row = conn.execute(ISOLATION_SQL).fetchone()
+        isolation = str(row[0]) if row else "unknown"
+        if require_snapshot and isolation not in ("repeatable read", "serializable"):
+            msg = f"the build needs one snapshot, but its transaction runs at '{isolation}'"
+            raise CoreError(msg)
+        recorded = conn.execute(RULES_SQL, (rules.version,)).fetchone()
+        if recorded is not None and recorded[0] != rules.parameters():
+            msg = (
+                f"rules version {rules.version} was built with other parameters; use a new version"
+            )
+            raise CoreError(msg)
+        # every source is validated exactly as for the substations: no verdict or a quarantined
+        # snapshot stops the build; the register of the units is one of them
+        versions = core.validated_sources(conn, {*rules.states, rules.wind_source})
         boundaries = conn.execute(core.ADMIN_VERSION_SQL, (rules.admin_source,)).fetchone()
         admin_version = int(boundaries[0]) if boundaries and boundaries[0] is not None else None
         params = _params(rules, versions, admin_version)
@@ -485,12 +514,13 @@ def build_wind_units(
                 json.dumps(versions),
                 json.dumps(counts),
                 digest,
+                isolation,
             ),
         ).fetchone()
         build_id = core.returned_id(built)
         with conn.cursor() as cursor:
             cursor.executemany(INSERT_SQL, [_insert_values(build_id, r) for r in rows])
-    return WindBuildResult(build_id, digest, counts, versions)
+    return WindBuildResult(build_id, digest, counts, versions, isolation)
 
 
 def format_report(result: WindBuildResult) -> list[str]:
