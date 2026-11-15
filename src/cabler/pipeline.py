@@ -19,6 +19,7 @@ Usage: python -m cabler.pipeline list
            --reason TEXT --reviewer NAME
        python -m cabler.pipeline evaluate {dev,staging,production}
        python -m cabler.pipeline places {dev,staging,production}
+       python -m cabler.pipeline windcore {dev,staging,production}
 """
 
 from __future__ import annotations
@@ -45,6 +46,7 @@ from cabler import (
     terrain,
     tiles,
     validate,
+    windcore,
 )
 from cabler.apply import ApplyError
 from cabler.core import CoreError
@@ -377,6 +379,18 @@ def _run_places(env: str) -> int:
     return 0
 
 
+def _run_windcore(env: str) -> int:
+    with db.connect("app", environ={"CABLER_ENV": env}) as conn:
+        try:
+            result = windcore.build_wind_units(conn)
+        except CoreError as exc:
+            print(f"ERROR windcore: {exc}", file=sys.stderr)
+            return 1
+    for line in windcore.format_report(result):
+        print(line)
+    return 0
+
+
 def _run_decide(env: str, args: argparse.Namespace) -> int:
     with db.connect("app", environ={"CABLER_ENV": env}) as conn:
         try:
@@ -510,6 +524,8 @@ def main(argv: list[str] | None = None) -> int:
     evaluate_cmd.add_argument("name", choices=NAMES)
     places_cmd = commands.add_parser("places", help="measure the places of substations and units")
     places_cmd.add_argument("name", choices=NAMES)
+    windcore_cmd = commands.add_parser("windcore", help="build the core wind units")
+    windcore_cmd.add_argument("name", choices=NAMES)
     decide_cmd = commands.add_parser("decide", help="record a decision about one substation")
     decide_cmd.add_argument("name", choices=NAMES)
     decide_cmd.add_argument("source", help="source id, for example osm_nrw")
@@ -574,6 +590,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.action == "places":
         return _run_places(args.name)
+
+    if args.action == "windcore":
+        return _run_windcore(args.name)
 
     if args.action == "decide":
         return _run_decide(args.name, args)
