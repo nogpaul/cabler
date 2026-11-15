@@ -33,6 +33,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -302,7 +303,7 @@ VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 
 """
 
 
-def _returned_id(row: tuple[Any, ...] | None) -> int:
+def returned_id(row: tuple[Any, ...] | None) -> int:
     """The id that an INSERT ... RETURNING must have given back."""
     if row is None:
         msg = "the database returned no row"
@@ -316,7 +317,7 @@ def register_rules(conn: psycopg.Connection[Any], rules: RuleSet) -> int:
     row = conn.execute(RULE_SQL, (rules.version,)).fetchone()
     if row is None:
         created = conn.execute(RULE_INSERT_SQL, (rules.version, json.dumps(wanted))).fetchone()
-        return _returned_id(created)
+        return returned_id(created)
     if row[1] != wanted:
         msg = f"rule set {rules.version} exists with other parameters; use a new version"
         raise CoreError(msg)
@@ -435,8 +436,13 @@ def validated_versions(conn: psycopg.Connection[Any], rules: RuleSet) -> dict[st
     if not rules.states:
         msg = "the rule set names no source"
         raise CoreError(msg)
+    return validated_sources(conn, rules.states)
+
+
+def validated_sources(conn: psycopg.Connection[Any], source_ids: Iterable[str]) -> dict[str, int]:
+    """The newest validated snapshot of each of the given sources (none is allowed)."""
     versions: dict[str, int] = {}
-    for source_id in sorted(rules.states):
+    for source_id in sorted(source_ids):
         verdict = conn.execute(VERDICT_SQL, (source_id,)).fetchone()
         if verdict is None:
             msg = f"{source_id}: no validated snapshot; run validate first"
@@ -473,7 +479,7 @@ def build_substations(conn: psycopg.Connection[Any], rules: RuleSet = DEFAULT_RU
             BUILD_SQL,
             (rule_set_id, json.dumps(versions), decisions_through, json.dumps(counts), digest),
         ).fetchone()
-        build_id = _returned_id(built)
+        build_id = returned_id(built)
         with conn.cursor() as cursor:
             cursor.executemany(INSERT_SQL, [_insert_values(build_id, r) for r in rows])
     return BuildResult(build_id, digest, counts, versions)
@@ -539,7 +545,7 @@ def record_decision(
             raise
         msg = f"another decision about {source_id}/{layer}/{osm_key} was recorded first; look again"
         raise CoreError(msg) from exc
-    return _returned_id(created)
+    return returned_id(created)
 
 
 QUEUE_SQL = """

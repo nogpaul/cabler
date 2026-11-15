@@ -4,10 +4,13 @@ The database is replaced by a small fake that answers each query of the build by
 tests need no database; tests/integration/test_windcore_db.py runs the same build against real data.
 """
 
+import dataclasses
 import json
 from contextlib import contextmanager
+from types import SimpleNamespace
 from typing import Any
 
+import psycopg
 import pytest
 
 from cabler import core, windcore
@@ -125,6 +128,23 @@ def test_the_parameters_are_a_stable_description_of_the_rules() -> None:
     assert first["confirm_m"] == 25
 
 
+def test_every_field_of_the_rules_is_recorded_except_the_version() -> None:
+    recorded = set(WindRules(version="1.0.0").parameters())
+    assert recorded == {f.name for f in dataclasses.fields(WindRules)} - {"version"}
+    json.dumps(WindRules(version="1.0.0", wind_states=("07",)).parameters())  # serialisable
+
+
+def test_the_default_rules_use_the_sources_of_the_substations() -> None:
+    assert windcore.DEFAULT_WIND_RULES.states == core.DEFAULT_RULES.states
+    assert windcore.DEFAULT_WIND_RULES.states is not core.DEFAULT_RULES.states
+
+
+def test_the_states_of_a_build_are_those_of_the_sources_and_the_extra_ones() -> None:
+    rules = WindRules(version="0.0.1", states={"osm_nrw": "05"}, wind_states=("07", "05"))
+    assert rules.all_states == ["05", "07"]
+    assert WindRules(version="0.0.1").all_states == []
+
+
 def row(key: str, **changes: Any) -> windcore.Row:
     values: dict[str, Any] = {
         "unit_id": 1,
@@ -227,6 +247,16 @@ class Database:
         self.verdict = verdict
         self.seen: dict[str, Any] = {}
         self.inserted: list[tuple[Any, ...]] = []
+        self.level: Any = None
+        self.info = SimpleNamespace(transaction_status=psycopg.pq.TransactionStatus.IDLE)
+
+    @property
+    def isolation_level(self) -> Any:
+        return self.level
+
+    @isolation_level.setter
+    def isolation_level(self, value: Any) -> None:
+        self.level = value
 
     @contextmanager
     def transaction(self) -> Any:
@@ -245,6 +275,7 @@ class Database:
             return Result([(11,)])
         if query == windcore.FACTS_SQL:
             self.seen["facts"] = params
+            self.seen["level"] = self.level  # the level while the build reads
             return Result(self.facts)
         if query == windcore.TURBINE_SQL:
             return Result([(40, 4)])
@@ -316,10 +347,34 @@ def test_a_build_without_a_validated_snapshot_is_refused() -> None:
         windcore.build_wind_units(Database([], verdict=None), RULES)  # type: ignore[arg-type]
 
 
-def test_a_build_without_any_source_in_the_rules_is_refused() -> None:
+def test_a_build_without_any_state_in_the_rules_is_refused() -> None:
     empty = WindRules(version="0.0.1")
-    with pytest.raises(CoreError, match="no source"):
+    with pytest.raises(CoreError, match="no state"):
         windcore.build_wind_units(Database([]), empty)  # type: ignore[arg-type]
+
+
+def test_a_state_without_an_osm_extract_is_built_with_no_osm_source() -> None:
+    db = Database([fact("SEE1", "In Betrieb", "POINT(1 2)")], verdict=None)
+    rules = WindRules(version="0.0.1", wind_states=("07",))
+    result = windcore.build_wind_units(db, rules)  # type: ignore[arg-type]
+    assert db.seen["facts"]["osm_sources"] == []
+    assert db.seen["facts"]["states"] == ["07"]
+    assert result.source_versions == {"bkg_vg250": 5, "wind_units": 11}
+    assert result.counts["class_plausible"] == 1  # nothing can confirm it, nothing speaks against
+
+
+def test_the_build_reads_in_one_repeatable_read_snapshot() -> None:
+    db = Database([fact("SEE1", "In Betrieb", "POINT(1 2)")])
+    windcore.build_wind_units(db, RULES)  # type: ignore[arg-type]
+    assert db.seen["level"] == psycopg.IsolationLevel.REPEATABLE_READ
+    assert db.level is None  # the connection is left as it was
+
+
+def test_an_open_transaction_keeps_its_own_isolation_level() -> None:
+    db = Database([fact("SEE1", "In Betrieb", "POINT(1 2)")])
+    db.info.transaction_status = psycopg.pq.TransactionStatus.INTRANS
+    windcore.build_wind_units(db, RULES)  # type: ignore[arg-type]
+    assert db.seen["level"] is None
 
 
 def test_the_report_shows_scenarios_positions_and_turbines() -> None:

@@ -25,8 +25,11 @@ database-generated number, so a rebuild from the raw data must give the same has
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -44,6 +47,7 @@ class WindRules:
 
     version: str
     states: dict[str, str] = field(default_factory=dict)  # OSM source id -> state key of MaStR
+    wind_states: tuple[str, ...] = ()  # more states, built without an OSM extract
     wind_source: str = "mastr_bulk"
     existing_statuses: tuple[str, ...] = ("In Betrieb", "Vorübergehend stillgelegt")
     planned_statuses: tuple[str, ...] = ("In Planung",)
@@ -66,22 +70,39 @@ class WindRules:
             msg = "registered_far_m and farm_gap_m must be positive"
             raise CoreError(msg)
 
+    @property
+    def all_states(self) -> list[str]:
+        """Every state of the build: those of the OSM sources and the extra ones."""
+        return sorted(set(self.states.values()) | set(self.wind_states))
+
     def parameters(self) -> dict[str, Any]:
-        return {
-            "states": dict(sorted(self.states.items())),
-            "wind_source": self.wind_source,
-            "existing_statuses": list(self.existing_statuses),
-            "planned_statuses": list(self.planned_statuses),
-            "bad_flags": list(self.bad_flags),
-            "match_m": self.match_m,
-            "confirm_m": self.confirm_m,
-            "registered_far_m": self.registered_far_m,
-            "farm_gap_m": self.farm_gap_m,
-            "admin_source": self.admin_source,
-        }
+        """Every field except the version, so that no parameter can go unrecorded."""
+        values = dataclasses.asdict(self)
+        del values["version"]
+        values["states"] = dict(sorted(self.states.items()))
+        return {k: list(v) if isinstance(v, tuple) else v for k, v in values.items()}
 
 
-DEFAULT_WIND_RULES = WindRules(version="1.0.0", states={"osm_nrw": "05", "osm_hamburg": "02"})
+# the OSM sources and their states are the ones of the substations: one place to add a state
+DEFAULT_WIND_RULES = WindRules(version="1.1.0", states=dict(core.DEFAULT_RULES.states))
+
+
+@contextmanager
+def repeatable_read(conn: psycopg.Connection[Any]) -> Iterator[None]:
+    """Make the next transaction REPEATABLE READ, so that every query of a build sees one snapshot.
+
+    Inside a transaction that already exists the level cannot be changed, and whoever opened that
+    transaction decides.
+    """
+    if conn.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
+        yield
+        return
+    before = conn.isolation_level
+    conn.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
+    try:
+        yield
+    finally:
+        conn.isolation_level = before
 
 
 @dataclass(frozen=True)
@@ -273,16 +294,23 @@ LEFT JOIN farm f ON f.unit_id = u.unit_id
 ORDER BY u.unit_key
 """
 )
+# The extracts overlap their neighbours, so one OSM object can be in two of them: it is counted
+# once, in the source with the lowest identifier.
 TURBINE_SQL = (
     "WITH "  # noqa: S608 (constants only, every value is a bound parameter)
     + OSM_CTE
-    + """
+    + """,
+single AS MATERIALIZED (
+    SELECT o.source_id, o.osm_key, o.location FROM osm o
+    WHERE NOT EXISTS (
+        SELECT 1 FROM osm x WHERE x.osm_key = o.osm_key AND x.source_id < o.source_id)
+)
 SELECT count(*),
        count(*) FILTER (WHERE NOT EXISTS (
            SELECT 1 FROM staging.wind_unit_current w
            WHERE w.source_id = %(wind_source)s AND w.geom IS NOT NULL AND w.status = ANY(%(active)s)
-             AND ST_DWithin(w.geom, osm.location, %(match)s)))
-FROM osm
+             AND ST_DWithin(w.geom, single.location, %(match)s)))
+FROM single
 """
 )
 BUILD_SQL = """
@@ -313,7 +341,7 @@ def _params(
         "osm_sources": sources,
         "osm_versions": [versions[s] for s in sources],
         "wind_source": rules.wind_source,
-        "states": sorted(set(rules.states.values())),
+        "states": rules.all_states,
         "bad_flags": list(rules.bad_flags),
         "active": list(rules.existing_statuses + rules.planned_statuses),
         "match": rules.match_m,
@@ -432,19 +460,20 @@ def build_wind_units(
     conn: psycopg.Connection[Any], rules: WindRules = DEFAULT_WIND_RULES
 ) -> WindBuildResult:
     """Build the wind units of the core from the register and the newest validated OSM snapshots."""
-    with conn.transaction():
+    if not rules.all_states:
+        msg = "the rule set names no state"
+        raise CoreError(msg)
+    with repeatable_read(conn), conn.transaction():
         # the sources are validated exactly as for the substations: no verdict or a quarantined
         # snapshot stops the build
-        versions = core.validated_versions(conn, core.RuleSet(version="0.0.0", states=rules.states))
+        versions = core.validated_sources(conn, rules.states)
         boundaries = conn.execute(core.ADMIN_VERSION_SQL, (rules.admin_source,)).fetchone()
         admin_version = int(boundaries[0]) if boundaries and boundaries[0] is not None else None
         params = _params(rules, versions, admin_version)
         rows = _facts(conn, rules, params)
         turbines = conn.execute(TURBINE_SQL, params).fetchone() or (0, 0)
         versions[rules.admin_source] = admin_version or 0
-        wind_version = conn.execute(
-            core.WIND_VERSION_SQL, (sorted(set(rules.states.values())),)
-        ).fetchone()
+        wind_version = conn.execute(core.WIND_VERSION_SQL, (rules.all_states,)).fetchone()
         versions["wind_units"] = int(wind_version[0]) if wind_version else 0
         counts = _counts(rows, (int(turbines[0]), int(turbines[1])))
         digest = content_hash(rows)
@@ -458,7 +487,7 @@ def build_wind_units(
                 digest,
             ),
         ).fetchone()
-        build_id = core._returned_id(built)
+        build_id = core.returned_id(built)
         with conn.cursor() as cursor:
             cursor.executemany(INSERT_SQL, [_insert_values(build_id, r) for r in rows])
     return WindBuildResult(build_id, digest, counts, versions)

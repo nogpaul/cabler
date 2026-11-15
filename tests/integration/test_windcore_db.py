@@ -23,11 +23,9 @@ from typing import Any
 import psycopg
 import pytest
 
-# the helpers of the substation tests: pytest puts this folder on the import path
-from test_core_db import BodyPublisher, boundaries_zip, box, prepared
-
 from cabler import apply, db, diff, fetch, load, sources, windcore
 from cabler.windcore import WindRules
+from itest_helpers import BodyPublisher, boundaries_zip, box, make_spec, prepared
 
 pytestmark = pytest.mark.integration
 
@@ -246,6 +244,62 @@ def test_the_confirm_distance_decides_what_counts_as_confirmation(tmp_path: Path
         assert result.counts["class_confirmed"] == 0
         assert result.counts["with_osm_turbine"] == 2
         assert result.counts["strict"] == 4
+
+
+def test_a_state_without_an_osm_extract_is_built_with_nothing_to_confirm_it(
+    tmp_path: Path,
+) -> None:
+    with db.connect("app") as conn, conn.transaction(force_rollback=True):
+        stage_units_turbines_and_boundaries(conn, tmp_path)
+        rules = dataclasses.replace(RULES, version="0.0.3", states={}, wind_states=("99",))
+        result = windcore.build_wind_units(conn, rules)
+        assert set(result.source_versions) == {"itest_admin", "wind_units"}
+        assert result.counts["units"] == 9
+        assert result.counts["osm_turbines"] == 0
+        assert result.counts["class_confirmed"] == 0
+        # w1 is now only plausible, like w3, f1, f2 and the retired unit
+        assert result.counts["class_plausible"] == 5
+        assert (result.counts["strict"], result.counts["likely"]) == (4, 4)
+
+
+def test_a_turbine_that_two_extracts_hold_is_counted_once(tmp_path: Path) -> None:
+    with db.connect("app") as conn, conn.transaction(force_rollback=True):
+        stage_units_turbines_and_boundaries(conn, tmp_path)
+        sources.register(conn, dataclasses.replace(make_spec(), source_id="itest_source2"))
+        version = conn.execute(
+            "SELECT max(valid_from_version_id) FROM staging.osm_power_feature"
+            " WHERE source_id = 'itest_source'"
+        ).fetchone()
+        assert version is not None
+        # the same OSM object, as the extract of a neighbouring state holds it
+        conn.execute(
+            "INSERT INTO staging.osm_power_feature"
+            " (source_id, layer, osm_key, valid_from_version_id, kind, power, geom, location)"
+            " SELECT 'itest_source2', layer, osm_key, valid_from_version_id, kind, power, geom,"
+            " location FROM staging.osm_power_feature"
+            " WHERE source_id = 'itest_source' AND osm_key = 'n9001'"
+        )
+        params = {
+            "osm_sources": ["itest_source", "itest_source2"],
+            "osm_versions": [version[0], version[0]],
+            "wind_source": "itest_source",
+            "active": ["In Betrieb", "In Planung"],
+            "match": 100,
+        }
+        assert conn.execute(windcore.TURBINE_SQL, params).fetchone() == (3, 1)
+
+
+def test_the_build_transaction_is_repeatable_read_unless_one_is_open() -> None:
+    with db.connect("app") as conn:
+        with windcore.repeatable_read(conn), conn.transaction():
+            level = conn.execute("SHOW transaction_isolation").fetchone()
+            assert level == ("repeatable read",)
+        assert conn.isolation_level is None  # left as it was
+        with conn.transaction(force_rollback=True):
+            conn.execute("SELECT 1")
+            with windcore.repeatable_read(conn), conn.transaction():
+                level = conn.execute("SHOW transaction_isolation").fetchone()
+                assert level == ("read committed",)  # the open transaction decides
 
 
 def test_the_application_role_cannot_change_a_build(tmp_path: Path) -> None:

@@ -28,22 +28,25 @@ The registered position is never changed. `core.wind_unit_current` shows the new
 Routing results can be computed in each scenario and compared. A difference between strict and
 inclusive is the effect of the units whose position nobody could confirm.
 
-## Parameters (rules version 1.0.0)
+## Parameters (rules version 1.1.0)
 `confirm_m` 25, `match_m` 100, `registered_far_m` 2,000, `farm_gap_m` 5,000, existing statuses
 *In Betrieb* and *Vorübergehend stillgelegt*, planned status *In Planung*, the register's own
-coordinate flags as invalid. Each build stores the parameters it used in `core.wind_build`, so a
-change of a limit is a new version and old builds stay readable.
+coordinate flags as invalid. The states come from the OSM sources of the rule set
+(`states`), plus the ones in `wind_states` that have no OSM extract. Each build stores every
+parameter it used in `core.wind_build`, so a change of a limit is a new version and old builds
+stay readable. Distances are rounded to 0.1 m before the limits are tested.
 
-## Measured on the real data (NRW and Hamburg, 6,834 units)
+## Measured on the real data (NRW and Hamburg)
 | scenario | units |
 | --- | --- |
 | strict | 3,955 |
 | likely | 6,091 |
 | inclusive | 6,203 |
 
-Positions: 3,885 confirmed, 2,559 plausible, 246 doubtful, 17 invalid, 127 unlocated (retired units
-included). 4,240 units have an OSM turbine within 100 m. 402 of the 4,425 OSM turbines have no active
-unit within 100 m.
+Of the 6,329 existing and planned units: 3,813 positions are confirmed, 2,278 plausible, 112
+doubtful, 14 invalid and 112 unlocated. 505 retired units are stored but in no scenario. 4,240
+units (4,072 of them existing or planned) have an OSM turbine within 100 m. 402 of the 4,425 OSM
+turbines have no active unit within 100 m; a turbine that two extracts hold is counted once.
 
 Of the existing and planned units whose registered municipality is more than 2 km from the position,
 567 are confirmed by an OSM turbine at the position, 112 are doubtful and 14 invalid. The registered
@@ -54,3 +57,6 @@ key is therefore the weaker evidence of the two, and a turbine outranks it.
   wind farm can be exchanged without anyone noticing, which does not matter for routing.
 - *Plausible* is not verified. For planned units there is usually no turbine yet.
 - Confirmation exists only where an OSM extract is a source: NRW and Hamburg.
+- The register's units have no validation verdict yet, unlike the OSM snapshots.
+- The nearest-turbine lookup compares every unit with every turbine; it takes 7 s here and needs an
+  index or a grid for a country-wide build.
