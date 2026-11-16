@@ -13,7 +13,7 @@ from typing import Any
 import psycopg
 import pytest
 
-from cabler import layercheck
+from cabler import layercheck, sources
 from cabler.db import ISOLATION_SQL
 from cabler.layercheck import CheckResult, Layer, Report
 
@@ -408,3 +408,8 @@ def test_the_printed_report_lists_what_is_not_ok_under_its_source() -> None:
     assert "geometry_invalid" not in text  # ok results stay out of the print
     assert "50 rows  ERROR" in text
     assert text.endswith("exit check FAILED: 1 errors, 1 warnings")
+
+
+def test_every_theme_that_the_registry_loads_belongs_to_a_layer() -> None:
+    used = {t for spec in sources.load_all().values() for t in spec.load_themes}
+    assert used <= set(layercheck.THEME_LAYERS)  # else source_missing could not see the source
