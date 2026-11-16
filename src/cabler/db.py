@@ -8,7 +8,8 @@ is read first, and real environment variables override it.
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Literal
 
@@ -75,3 +76,27 @@ def connect(
         password=settings[password_var],
         connect_timeout=10,
     )
+
+
+ISOLATION_SQL = "SHOW transaction_isolation"
+
+
+@contextmanager
+def repeatable_read(conn: psycopg.Connection[Any]) -> Iterator[None]:
+    """Make the next transaction REPEATABLE READ, so that every query of it sees one snapshot.
+
+    Inside a transaction that already exists the level cannot be changed, and whoever opened that
+    transaction decides.
+    """
+    if conn.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
+        yield
+        return
+    before = conn.isolation_level
+    conn.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
+    try:
+        yield
+    finally:
+        # a connection that is broken or still in a failed transaction cannot be changed, and
+        # trying would hide the error that brought it there
+        if conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE:
+            conn.isolation_level = before

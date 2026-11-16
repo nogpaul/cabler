@@ -28,8 +28,6 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -37,6 +35,7 @@ import psycopg
 
 from . import core
 from .core import CoreError
+from .db import ISOLATION_SQL, repeatable_read
 
 CLASSES = ("confirmed", "plausible", "doubtful", "invalid", "unlocated")
 
@@ -85,27 +84,6 @@ class WindRules:
 
 # the OSM sources and their states are the ones of the substations: one place to add a state
 DEFAULT_WIND_RULES = WindRules(version="1.1.0", states=dict(core.DEFAULT_RULES.states))
-
-
-@contextmanager
-def repeatable_read(conn: psycopg.Connection[Any]) -> Iterator[None]:
-    """Make the next transaction REPEATABLE READ, so that every query of a build sees one snapshot.
-
-    Inside a transaction that already exists the level cannot be changed, and whoever opened that
-    transaction decides.
-    """
-    if conn.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
-        yield
-        return
-    before = conn.isolation_level
-    conn.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
-    try:
-        yield
-    finally:
-        # a connection that is broken or still in a failed transaction cannot be changed, and
-        # trying would hide the error that brought it there
-        if conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE:
-            conn.isolation_level = before
 
 
 @dataclass(frozen=True)
@@ -321,7 +299,6 @@ FROM single
 RULES_SQL = (
     "SELECT parameters FROM core.wind_build WHERE rules_version = %s ORDER BY wind_build_id LIMIT 1"
 )
-ISOLATION_SQL = "SHOW transaction_isolation"
 BUILD_SQL = """
 INSERT INTO core.wind_build
     (rules_version, parameters, source_versions, counts, content_hash, isolation)
