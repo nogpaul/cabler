@@ -5,6 +5,7 @@ The core functions are replaced by canned results, so these tests need no databa
 
 from typing import Any
 
+import psycopg
 import pytest
 
 from cabler import core, layercheck, pipeline, windcore
@@ -278,9 +279,28 @@ def test_exitcheck_prints_the_report_stores_it_and_exits_with_the_verdict(
     assert code == 0  # a warning never fails the check
     assert (seen["options"]["validity"], seen["options"]["files"]) == (False, False)
     assert seen["options"]["raw"].parts[-2:] == ("dev", "raw")  # the snapshots of the environment
+    assert "osm_power" in seen["options"]["expected"]  # the sources that every layer must hold
     assert "WARNING  flag:area_mismatch" in out
     assert "exit check PASSED: 0 errors, 1 warnings" in out
     assert "stored as check run 7" in out
+
+
+def test_exitcheck_shows_the_findings_even_when_the_report_cannot_be_stored(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    flag = layercheck.CheckResult("parcel", "alkis_nrw", "flag:area_mismatch", "warning", 14, 100)
+    monkeypatch.setattr(
+        pipeline.layercheck, "run_checks", lambda conn, **kwargs: layercheck.Report((flag,))
+    )
+
+    def refuse(conn: Any, report: Any, options: Any) -> int:
+        raise psycopg.errors.InsufficientPrivilege("permission denied for table check_run")
+
+    monkeypatch.setattr(pipeline.layercheck, "store_report", refuse)
+    code, out, err = run(["exitcheck", "dev"], capsys)
+    assert code == 1  # the check did not leave its evidence
+    assert "flag:area_mismatch" in out  # but the findings of the long scan are not lost
+    assert "ERROR exitcheck: the report could not be stored" in err
 
 
 def test_exitcheck_with_an_error_exits_with_one(
