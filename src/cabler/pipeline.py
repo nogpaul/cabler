@@ -20,6 +20,7 @@ Usage: python -m cabler.pipeline list
        python -m cabler.pipeline evaluate {dev,staging,production}
        python -m cabler.pipeline places {dev,staging,production}
        python -m cabler.pipeline windcore {dev,staging,production}
+       python -m cabler.pipeline exitcheck {dev,staging,production} [--fast] [--no-files]
 """
 
 from __future__ import annotations
@@ -39,6 +40,7 @@ from cabler import (
     diff,
     evaluate,
     fetch,
+    layercheck,
     load,
     places,
     remote,
@@ -382,13 +384,23 @@ def _run_places(env: str) -> int:
 def _run_windcore(env: str) -> int:
     with db.connect("app", environ={"CABLER_ENV": env}) as conn:
         try:
-            result = windcore.build_wind_units(conn)
+            result = windcore.build_wind_units(conn, require_snapshot=True)
         except CoreError as exc:
             print(f"ERROR windcore: {exc}", file=sys.stderr)
             return 1
     for line in windcore.format_report(result):
         print(line)
     return 0
+
+
+def _run_exitcheck(env: str, *, fast: bool, files: bool) -> int:
+    with db.connect("app", environ={"CABLER_ENV": env}) as conn:
+        report = layercheck.run_checks(conn, validity=not fast, files=files, raw=fetch.raw_dir(env))
+        run_id = layercheck.store_report(conn, report, {"validity": not fast, "files": files})
+    for line in layercheck.format_report(report):
+        print(line)
+    print(f"stored as check run {run_id}")
+    return 0 if report.passed else 1
 
 
 def _run_decide(env: str, args: argparse.Namespace) -> int:
@@ -526,6 +538,14 @@ def main(argv: list[str] | None = None) -> int:
     places_cmd.add_argument("name", choices=NAMES)
     windcore_cmd = commands.add_parser("windcore", help="build the core wind units")
     windcore_cmd.add_argument("name", choices=NAMES)
+    exit_cmd = commands.add_parser("exitcheck", help="judge every data layer; exit 1 on an error")
+    exit_cmd.add_argument("name", choices=NAMES)
+    exit_cmd.add_argument(
+        "--fast", action="store_true", help="skip the geometry validity scan (a partial check)"
+    )
+    exit_cmd.add_argument(
+        "--no-files", action="store_true", help="do not look for the snapshot files on disk"
+    )
     decide_cmd = commands.add_parser("decide", help="record a decision about one substation")
     decide_cmd.add_argument("name", choices=NAMES)
     decide_cmd.add_argument("source", help="source id, for example osm_nrw")
@@ -593,6 +613,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.action == "windcore":
         return _run_windcore(args.name)
+
+    if args.action == "exitcheck":
+        return _run_exitcheck(args.name, fast=args.fast, files=not args.no_files)
 
     if args.action == "decide":
         return _run_decide(args.name, args)

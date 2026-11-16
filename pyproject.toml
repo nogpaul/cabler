@@ -46,6 +46,8 @@ files = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# the shared helpers of the integration tests (tests/itest_helpers.py) are imported by their name
+pythonpath = ["tests"]
 addopts = "-ra --strict-markers"
 markers = [
     "integration: needs a running database",

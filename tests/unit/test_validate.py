@@ -116,3 +116,81 @@ def test_the_review_queue_is_summarised_by_suggestion() -> None:
             return FakeResult([("hv_candidate", 2), ("conflict", 1)])
 
     assert validate.review_counts(Conn(), "demo") == {"conflict": 1, "hv_candidate": 2}  # type: ignore[arg-type]
+
+
+class WindConnection:
+    """Answers the queries of the wind unit rules from canned numbers and keeps what is written."""
+
+    def __init__(self, total: int, before: int, removed: int, flags: dict[str, int]) -> None:
+        self.numbers = {
+            validate.WIND_TOTAL_SQL: total,
+            validate.WIND_BEFORE_SQL: before,
+            validate.WIND_REMOVED_SQL: removed,
+        }
+        self.flags = flags
+        self.findings: list[tuple[Any, ...]] = []
+        self.verdict: tuple[Any, ...] | None = None
+
+    def execute(self, query: str, params: Any = None) -> FakeResult:
+        if query in self.numbers:
+            return FakeResult([(self.numbers[query],)])
+        if query == validate.WIND_FLAGS_SQL:
+            return FakeResult(list(self.flags.items()))
+        if query == validate.FINDING_SQL:
+            self.findings.append(params)
+            return FakeResult([])
+        if query == validate.SUMMARY_SQL:
+            counts: dict[tuple[str, str], int] = {}
+            for _, rule, severity, _ in self.findings:
+                counts[(rule, severity)] = counts.get((rule, severity), 0) + 1
+            return FakeResult([(rule, severity, n) for (rule, severity), n in counts.items()])
+        if query == validate.VERDICT_SQL:
+            self.verdict = params
+            return FakeResult([])
+        raise AssertionError(query)
+
+
+def judge_wind(conn: WindConnection) -> ValidateStep:
+    return validate.validate_wind_version(conn, "mastr_bulk", 12)  # type: ignore[arg-type]
+
+
+def test_a_register_with_a_few_flags_passes_with_a_warning_for_the_missing_coordinates() -> None:
+    conn = WindConnection(
+        44_366,
+        44_000,
+        10,
+        {
+            "coordinate_missing": 1_335,  # 3.0%: a warning
+            "coordinate_placeholder": 2,
+            "coordinate_outside_state": 13,
+            "coordinate_outside_germany": 5,
+        },
+    )
+    result = judge_wind(conn)
+    assert (result.outcome, result.errors, result.warnings) == ("passed", 0, 1)
+    assert result.rules == {"coordinate_missing": 1}
+    assert conn.verdict == (12, "mastr_bulk", "passed", 0, 1)
+
+
+def test_a_register_with_most_coordinates_missing_is_quarantined() -> None:
+    conn = WindConnection(1_000, 1_000, 0, {"coordinate_missing": 400})
+    result = judge_wind(conn)
+    assert (result.outcome, result.errors) == ("quarantined", 1)
+    assert "coordinate_missing" in result.problems[0]
+
+
+def test_an_empty_register_is_quarantined() -> None:
+    result = judge_wind(WindConnection(0, 0, 0, {}))
+    assert (result.outcome, result.rules) == ("quarantined", {"empty_state": 1})
+
+
+def test_a_register_that_loses_a_third_of_its_units_is_quarantined() -> None:
+    result = judge_wind(WindConnection(700, 1_000, 300, {}))
+    assert result.outcome == "quarantined"
+    assert "removal_share" in result.rules
+
+
+def test_a_register_of_wind_units_has_a_validator(make_spec: SpecFactory) -> None:
+    spec = make_spec(load_kind="mastr_xml", load_themes=("wind",))
+    result = validate.validate_source(FakeConnection((9,)), spec)  # type: ignore[arg-type]
+    assert result.status == "skipped"  # nothing is pending; it was accepted as a source to judge

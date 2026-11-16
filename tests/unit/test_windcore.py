@@ -248,6 +248,7 @@ class Database:
         self.seen: dict[str, Any] = {}
         self.inserted: list[tuple[Any, ...]] = []
         self.level: Any = None
+        self.recorded: Any = None  # the parameters of an earlier build with the same version
         self.info = SimpleNamespace(transaction_status=psycopg.pq.TransactionStatus.IDLE)
 
     @property
@@ -282,6 +283,13 @@ class Database:
         if query == windcore.BUILD_SQL:
             self.seen["build"] = params
             return Result([(3,)])
+        if query == windcore.ISOLATION_SQL:
+            level = (
+                "repeatable read" if self.level == psycopg.IsolationLevel.REPEATABLE_READ else None
+            )
+            return Result([(level or "read committed",)])
+        if query == windcore.RULES_SQL:
+            return Result([(self.recorded,)] if self.recorded is not None else [])
         raise AssertionError(query)
 
 
@@ -314,7 +322,13 @@ def test_a_build_classifies_every_fact_and_records_rules_inputs_and_hash() -> No
     )
     result = windcore.build_wind_units(db, RULES)  # type: ignore[arg-type]
     assert result.build_id == 3
-    assert result.source_versions == {"osm_nrw": 7, "bkg_vg250": 5, "wind_units": 11}
+    # the register of the units is judged like the OSM snapshots
+    assert result.source_versions == {
+        "mastr_bulk": 7,
+        "osm_nrw": 7,
+        "bkg_vg250": 5,
+        "wind_units": 11,
+    }
     assert result.counts["units"] == 4
     assert (
         result.counts["class_confirmed"] == 1
@@ -332,8 +346,9 @@ def test_a_build_classifies_every_fact_and_records_rules_inputs_and_hash() -> No
     assert db.seen["facts"]["osm_versions"] == [7]
     assert db.seen["facts"]["states"] == ["05"]
     assert db.seen["facts"]["admin_version"] == 5
-    version, parameters, versions, counts, digest = db.seen["build"]
+    version, parameters, versions, counts, digest, isolation = db.seen["build"]
     assert version == "0.0.1"
+    assert isolation == "repeatable read"
     assert json.loads(parameters)["confirm_m"] == 25
     assert json.loads(versions)["wind_units"] == 11
     assert json.loads(counts)["osm_turbines_without_unit"] == 4
@@ -354,12 +369,12 @@ def test_a_build_without_any_state_in_the_rules_is_refused() -> None:
 
 
 def test_a_state_without_an_osm_extract_is_built_with_no_osm_source() -> None:
-    db = Database([fact("SEE1", "In Betrieb", "POINT(1 2)")], verdict=None)
+    db = Database([fact("SEE1", "In Betrieb", "POINT(1 2)")])
     rules = WindRules(version="0.0.1", wind_states=("07",))
     result = windcore.build_wind_units(db, rules)  # type: ignore[arg-type]
     assert db.seen["facts"]["osm_sources"] == []
     assert db.seen["facts"]["states"] == ["07"]
-    assert result.source_versions == {"bkg_vg250": 5, "wind_units": 11}
+    assert result.source_versions == {"mastr_bulk": 7, "bkg_vg250": 5, "wind_units": 11}
     assert result.counts["class_plausible"] == 1  # nothing can confirm it, nothing speaks against
 
 
@@ -373,8 +388,59 @@ def test_the_build_reads_in_one_repeatable_read_snapshot() -> None:
 def test_an_open_transaction_keeps_its_own_isolation_level() -> None:
     db = Database([fact("SEE1", "In Betrieb", "POINT(1 2)")])
     db.info.transaction_status = psycopg.pq.TransactionStatus.INTRANS
-    windcore.build_wind_units(db, RULES)  # type: ignore[arg-type]
+    result = windcore.build_wind_units(db, RULES)  # type: ignore[arg-type]
     assert db.seen["level"] is None
+    assert result.isolation == "read committed"  # the build says that it had no snapshot
+
+
+def test_a_build_that_must_have_one_snapshot_is_refused_in_an_open_transaction() -> None:
+    db = Database([fact("SEE1", "In Betrieb", "POINT(1 2)")])
+    db.info.transaction_status = psycopg.pq.TransactionStatus.INTRANS
+    with pytest.raises(CoreError, match=r"one snapshot.*read committed"):
+        windcore.build_wind_units(db, RULES, require_snapshot=True)  # type: ignore[arg-type]
+    assert "build" not in db.seen  # nothing was stored
+
+
+def test_a_build_that_must_have_one_snapshot_gets_it_on_an_idle_connection() -> None:
+    db = Database([fact("SEE1", "In Betrieb", "POINT(1 2)")])
+    result = windcore.build_wind_units(db, RULES, require_snapshot=True)  # type: ignore[arg-type]
+    assert result.isolation == "repeatable read"
+
+
+def test_a_rules_version_with_other_parameters_is_refused() -> None:
+    db = Database([fact("SEE1", "In Betrieb", "POINT(1 2)")])
+    db.recorded = dataclasses.replace(RULES, confirm_m=30).parameters()
+    with pytest.raises(CoreError, match=r"0\.0\.1 was built with other parameters"):
+        windcore.build_wind_units(db, RULES)  # type: ignore[arg-type]
+    assert "build" not in db.seen
+
+
+def test_a_rules_version_with_the_same_parameters_builds_again() -> None:
+    db = Database([fact("SEE1", "In Betrieb", "POINT(1 2)")])
+    db.recorded = RULES.parameters()
+    assert windcore.build_wind_units(db, RULES).build_id == 3  # type: ignore[arg-type]
+
+
+def test_the_isolation_level_is_not_reset_on_a_connection_that_cannot_take_it() -> None:
+    db = Database([fact("SEE1", "In Betrieb", "POINT(1 2)")])
+
+    class BrokenError(Exception):
+        pass
+
+    def fail_in_a_broken_transaction() -> None:
+        with windcore.repeatable_read(db):  # type: ignore[arg-type]
+            assert db.level == psycopg.IsolationLevel.REPEATABLE_READ
+            db.info.transaction_status = psycopg.pq.TransactionStatus.INERROR
+            raise BrokenError
+
+    with pytest.raises(BrokenError):
+        fail_in_a_broken_transaction()
+    assert db.level == psycopg.IsolationLevel.REPEATABLE_READ  # left alone, the error comes through
+
+
+def test_sources_must_be_a_collection_not_one_string() -> None:
+    with pytest.raises(TypeError, match="not one string"):
+        core.validated_sources(Database([]), "osm_nrw")  # type: ignore[arg-type]
 
 
 def test_the_report_shows_scenarios_positions_and_turbines() -> None:
