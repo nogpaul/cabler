@@ -394,11 +394,19 @@ def _run_windcore(env: str) -> int:
 
 
 def _run_exitcheck(env: str, *, fast: bool, files: bool) -> int:
+    expected = layercheck.expected_sources(sources.load_all().values())
     with db.connect("app", environ={"CABLER_ENV": env}) as conn:
-        report = layercheck.run_checks(conn, validity=not fast, files=files, raw=fetch.raw_dir(env))
-        run_id = layercheck.store_report(conn, report, {"validity": not fast, "files": files})
-    for line in layercheck.format_report(report):
-        print(line)
+        report = layercheck.run_checks(
+            conn, validity=not fast, files=files, raw=fetch.raw_dir(env), expected=expected
+        )
+        # the findings of a long scan are shown before anything is stored
+        for line in layercheck.format_report(report):
+            print(line)
+        try:
+            run_id = layercheck.store_report(conn, report, {"validity": not fast, "files": files})
+        except psycopg.Error as exc:
+            print(f"ERROR exitcheck: the report could not be stored: {exc}", file=sys.stderr)
+            return 1
     print(f"stored as check run {run_id}")
     return 0 if report.passed else 1
 

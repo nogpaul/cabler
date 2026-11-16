@@ -131,6 +131,43 @@ def test_a_tile_in_another_reference_system_is_an_error() -> None:
         )
         assert results_of(report)["tile_not_25832"].severity == "error"
         assert results_of(report)["geometry_invalid"].severity == "ok"
+        assert "lineage_snapshot_missing" not in results_of(report)  # nothing to check, no result
+
+
+def test_a_geometry_that_reaches_out_of_germany_is_found_and_a_skipped_scan_says_so() -> None:
+    reaching = (
+        "POLYGON((269900 5700000, 270100 5700000, 270100 5700100, 269900 5700100, 269900 5700000))"
+    )
+    with db.connect("app") as conn, conn.transaction(force_rollback=True):
+        register(conn, "itest_check")
+        sealed = snapshot(conn, "itest_check", "a" * 64, "applied")
+        land_cover(conn, "itest_check", "inside", sealed, "211", SQUARE)
+        land_cover(conn, "itest_check", "reaching", sealed, "211", reaching)
+        land_cover(conn, "itest_check", "bowtie", sealed, "211", BOWTIE)
+        layer = layer_of("land_cover", "itest_check")
+        full = layercheck.run_checks(conn, (layer,), files=False)
+        assert results_of(full)["outside_germany"].bad == 1  # the box of one reaches over the edge
+        assert results_of(full)["geometry_invalid"].bad == 1
+        fast = layercheck.run_checks(conn, (layer,), files=False, validity=False)
+        found = results_of(fast)["geometry_invalid"]
+        assert (found.severity, found.bad) == ("info", 0)
+        assert "skipped" in found.message
+        assert fast.partial
+        assert fast.isolation == "read committed"  # inside the outer transaction of the test
+
+
+def test_a_source_with_an_applied_snapshot_and_no_rows_is_found() -> None:
+    with db.connect("app") as conn, conn.transaction(force_rollback=True):
+        register(conn, "itest_check")
+        snapshot(conn, "itest_check", "a" * 64, "applied")  # applied, and nothing was loaded
+        report = layercheck.run_checks(
+            conn,
+            (layer_of("land_cover", "itest_check"),),
+            files=False,
+            expected={"land_cover": frozenset({"itest_check", "itest_never_applied"})},
+        )
+        checks = [(r.check, r.source_id) for r in report.results]
+        assert checks == [("layer_not_empty", "-"), ("source_missing", "itest_check")]
 
 
 def test_a_snapshot_without_a_verdict_is_an_error_until_it_is_judged(tmp_path: Path) -> None:
