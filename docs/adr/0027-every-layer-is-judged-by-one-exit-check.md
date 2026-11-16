@@ -58,3 +58,19 @@ remembering what had been looked at. Two designs were considered:
 - The thresholds of the register validator are first values chosen from the real register (3.0% of
   the units have no coordinate, two a placeholder); they are constants of `cabler.validate` and
   change with a release.
+
+## Amendment (v0.22.1), after the review of the first release
+- **A vanished source is an error.** The registry says which sources belong to a layer (by their
+  themes); a source with an applied snapshot and no current row in its layer fails the check, so
+  that one missing source cannot hide behind the others of the layer.
+- **A skipped check is not an ok.** With `--fast` the validity of the geometries is stored as
+  skipped, the printed verdict says that the run is partial, and the stored run says so too.
+- **No result without a check.** A layer without a column for its snapshot (the terrain tiles) has
+  no lineage results. A check against the catalogue of tiles comes with the benchmark sites.
+- **One snapshot.** The whole check reads in one REPEATABLE READ transaction and stores the level.
+- **Containment, not overlap.** A geometry is inside Germany when its box lies completely inside
+  the envelope (for a rectangle that is containment). On the real data five protected areas fail
+  it that passed the test of overlapping boxes.
+- **One list of checks.** The SQL of the scan and the results are made from the same list, so
+  that a count cannot be assigned to the wrong check.
+- **Findings first.** The report is printed before it is stored.
