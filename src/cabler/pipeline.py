@@ -21,6 +21,7 @@ Usage: python -m cabler.pipeline list
        python -m cabler.pipeline places {dev,staging,production}
        python -m cabler.pipeline windcore {dev,staging,production}
        python -m cabler.pipeline exitcheck {dev,staging,production} [--fast] [--no-files]
+       python -m cabler.pipeline dictionary {dev,staging,production} [--check]
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ from cabler import (
     checks,
     core,
     db,
+    dictionary,
     diff,
     evaluate,
     fetch,
@@ -411,6 +413,35 @@ def _run_exitcheck(env: str, *, fast: bool, files: bool) -> int:
     return 0 if report.passed else 1
 
 
+DICTIONARY_PATH = db.REPO_ROOT / "docs" / "data-dictionary.md"
+
+
+def _run_dictionary(env: str, *, check: bool) -> int:
+    with db.connect("ro", environ={"CABLER_ENV": env}) as conn:
+        found = dictionary.read(conn)
+    gaps = dictionary.missing(found)
+    for gap in gaps:
+        print(f"ERROR dictionary: no description for {gap}", file=sys.stderr)
+    if gaps:
+        return 1
+    text = dictionary.render(found)
+    name = DICTIONARY_PATH.name
+    if check:
+        written = DICTIONARY_PATH.read_text(encoding="utf-8") if DICTIONARY_PATH.is_file() else ""
+        if written != text:
+            print(f"ERROR dictionary: {name} is out of date; run make dictionary", file=sys.stderr)
+            return 1
+        print(f"{name} is up to date (migration {found.migration:04d})")
+        return 0
+    DICTIONARY_PATH.write_text(text, encoding="utf-8")
+    columns = sum(len(r.columns) for r in found.relations)
+    print(
+        f"wrote {name}: {len(found.relations)} tables and views, {columns} columns, "
+        f"{len(found.functions)} functions (migration {found.migration:04d})"
+    )
+    return 0
+
+
 def _run_decide(env: str, args: argparse.Namespace) -> int:
     with db.connect("app", environ={"CABLER_ENV": env}) as conn:
         try:
@@ -554,6 +585,13 @@ def main(argv: list[str] | None = None) -> int:
     exit_cmd.add_argument(
         "--no-files", action="store_true", help="do not look for the snapshot files on disk"
     )
+    dictionary_cmd = commands.add_parser(
+        "dictionary", help="write docs/data-dictionary.md from the comments in the database"
+    )
+    dictionary_cmd.add_argument("name", choices=NAMES)
+    dictionary_cmd.add_argument(
+        "--check", action="store_true", help="only compare with the written file; exit 1 if stale"
+    )
     decide_cmd = commands.add_parser("decide", help="record a decision about one substation")
     decide_cmd.add_argument("name", choices=NAMES)
     decide_cmd.add_argument("source", help="source id, for example osm_nrw")
@@ -624,6 +662,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.action == "exitcheck":
         return _run_exitcheck(args.name, fast=args.fast, files=not args.no_files)
+
+    if args.action == "dictionary":
+        return _run_dictionary(args.name, check=args.check)
 
     if args.action == "decide":
         return _run_decide(args.name, args)
