@@ -74,3 +74,12 @@ remembering what had been looked at. Two designs were considered:
 - **One list of checks.** The SQL of the scan and the results are made from the same list, so
   that a count cannot be assigned to the wrong check.
 - **Findings first.** The report is printed before it is stored.
+
+## Amendment (v0.23.0)
+- **An empty geometry is a missing geometry.** `geometry_missing` counts a row whose geometry is
+  NULL or empty: an empty geometry is valid, its box is NULL, so no other check saw it. Measured
+  before the change, no current row of the 10.6 million has one; the polygon layers already flag it
+  (`geometry_empty`), the others had nothing.
+- **A refused store is tested on a real connection.** A test runs the command as the read-only
+  role: the findings are printed, the error says why the report was not stored, and the exit code is
+  1, with no second error from the connection.

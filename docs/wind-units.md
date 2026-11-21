@@ -32,9 +32,10 @@ inclusive is the effect of the units whose position nobody could confirm.
 `confirm_m` 25, `match_m` 100, `registered_far_m` 2,000, `farm_gap_m` 5,000, existing statuses
 *In Betrieb* and *Vorübergehend stillgelegt*, planned status *In Planung*, the register's own
 coordinate flags as invalid. The states come from the OSM sources of the rule set
-(`states`), plus the ones in `wind_states` that have no OSM extract. Each build stores every
-parameter it used in `core.wind_build`, so a change of a limit is a new version and old builds
-stay readable. Distances are rounded to 0.1 m before the limits are tested.
+(`states`), plus the ones in `wind_states` that have no OSM extract. Every parameter is stored
+with its version in `core.wind_rule_set`, and each build names its version, so a change of a limit
+is a new version and old builds stay readable. Distances are rounded to 0.1 m before the limits are
+tested.
 
 ## Measured on the real data (NRW and Hamburg)
 | scenario | units |

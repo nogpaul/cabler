@@ -68,3 +68,14 @@ the NRW units (ADR-0025). Two choices were considered for a coordinate that look
 - The lookup of the nearest turbine compares every unit with every turbine (7 s for NRW and
   Hamburg). A country-wide build needs an index or a grid; that is a scale item for the hardening
   phase.
+
+## Amendment (v0.23.0): the rules get a table of their own
+A rules version was defined by the parameters of the first build that used it, and every build
+compared its parameters with that build. Two builds that started at the same time with a new version
+could both pass the comparison and store two different meanings of one version. Now
+`core.wind_rule_set` holds one row per version, with the version as its primary key, and every build
+names its version by a foreign key; the parameters moved there from `core.wind_build`. A build
+stores its version if it is new and refuses a version that exists with other parameters; two builds
+at the same time cannot both store one, the second fails. The table refuses changes like the other
+core tables. Migration 0022 moved the two versions of the real builds (1.0.0 and 1.1.0); it refuses
+to run if a build had other parameters than the first build of its version.
