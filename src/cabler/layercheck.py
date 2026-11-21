@@ -3,8 +3,8 @@
 A layer is *loaded, valid, in the right CRS, with its lineage recorded* when, for every source in
 it, the current rows pass these checks:
 
-* ``geometry_missing``: a row without a geometry (an error, except for wind units, whose register
-  has none for some units: a warning);
+* ``geometry_missing``: a row without a geometry, or with an empty one (an error, except for wind
+  units, whose register has none for some units: a warning);
 * ``crs_not_25832``: a geometry in another reference system (an error);
 * ``geometry_invalid``: a geometry that is not valid after the repair of the apply stage (an error;
   with ``validity=False`` it is stored as *skipped*, never as ok, and the report is *partial*);
@@ -223,7 +223,12 @@ def checks_of(layer: Layer, *, validity: bool) -> list[Check]:
     g = f"t.{layer.geom}"
     box = ", ".join(str(x) for x in GERMANY_ENVELOPE)
     checks = [
-        Check("geometry_missing", f"{g} IS NULL", layer.null_geom, "rows without a geometry"),
+        Check(
+            "geometry_missing",
+            f"{g} IS NULL OR ST_IsEmpty({g})",  # an empty geometry is of no more use than none
+            layer.null_geom,
+            "rows without a geometry (none, or an empty one)",
+        ),
         Check(
             "crs_not_25832",
             f"{g} IS NOT NULL AND ST_SRID({g}) <> 25832",

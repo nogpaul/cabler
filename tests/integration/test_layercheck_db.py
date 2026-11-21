@@ -14,7 +14,7 @@ from typing import Any
 import psycopg
 import pytest
 
-from cabler import core, db, layercheck, sources, validate, windcore
+from cabler import core, db, layercheck, pipeline, sources, validate, windcore
 from cabler.core import CoreError
 from cabler.layercheck import LAYERS, Layer
 from itest_helpers import make_spec, prepared
@@ -154,6 +154,36 @@ def test_a_geometry_that_reaches_out_of_germany_is_found_and_a_skipped_scan_says
         assert "skipped" in found.message
         assert fast.partial
         assert fast.isolation == "read committed"  # inside the outer transaction of the test
+
+
+def test_an_empty_geometry_is_counted_as_a_missing_one() -> None:
+    with db.connect("app") as conn, conn.transaction(force_rollback=True):
+        register(conn, "itest_check")
+        sealed = snapshot(conn, "itest_check", "a" * 64, "applied")
+        land_cover(conn, "itest_check", "inside", sealed, "211", SQUARE)
+        land_cover(conn, "itest_check", "empty", sealed, "211", "POLYGON EMPTY")
+        report = layercheck.run_checks(conn, (layer_of("land_cover", "itest_check"),), files=False)
+        found = results_of(report)["geometry_missing"]
+        assert (found.severity, found.bad, found.total) == ("error", 1, 2)
+        assert results_of(report)["outside_germany"].bad == 0  # an empty box is nowhere
+
+
+def test_a_refused_store_on_a_real_connection_still_shows_the_findings(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    real_connect, real_run = db.connect, layercheck.run_checks
+    # the read-only role may read every layer, but it may not write a report
+    monkeypatch.setattr(pipeline.db, "connect", lambda role, environ=None: real_connect("ro"))
+    monkeypatch.setattr(
+        pipeline.layercheck,
+        "run_checks",
+        lambda conn, **kwargs: real_run(conn, (layer_of("land_cover", "itest_none"),), **kwargs),
+    )
+    code = pipeline._run_exitcheck("dev", fast=True, files=False)
+    out, err = capsys.readouterr()
+    assert code == 1
+    assert "layer_not_empty" in out  # printed before the store was tried
+    assert "ERROR exitcheck: the report could not be stored: permission denied" in err
 
 
 def test_a_source_with_an_applied_snapshot_and_no_rows_is_found() -> None:

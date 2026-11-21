@@ -115,6 +115,11 @@ def test_the_checks_and_the_scan_are_made_from_one_list() -> None:
     ]
 
 
+def test_an_empty_geometry_counts_as_a_missing_one() -> None:
+    sql = layercheck.scan_sql(PLAIN, validity=True)
+    assert "count(*) FILTER (WHERE t.geom IS NULL OR ST_IsEmpty(t.geom))" in sql
+
+
 def test_a_geometry_is_outside_germany_unless_its_box_is_completely_inside() -> None:
     sql = layercheck.scan_sql(PLAIN, validity=True)
     assert "NOT (t.geom @ ST_MakeEnvelope(" in sql  # contained by, not just overlapping
