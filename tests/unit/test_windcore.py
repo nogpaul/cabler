@@ -248,7 +248,7 @@ class Database:
         self.seen: dict[str, Any] = {}
         self.inserted: list[tuple[Any, ...]] = []
         self.level: Any = None
-        self.recorded: Any = None  # the parameters of an earlier build with the same version
+        self.recorded: Any = None  # the parameters stored for the version of the rules
         self.info = SimpleNamespace(transaction_status=psycopg.pq.TransactionStatus.IDLE)
 
     @property
@@ -288,7 +288,12 @@ class Database:
                 "repeatable read" if self.level == psycopg.IsolationLevel.REPEATABLE_READ else None
             )
             return Result([(level or "read committed",)])
-        if query == windcore.RULES_SQL:
+        if query == windcore.RULE_INSERT_SQL:
+            self.seen["rules"] = params
+            if self.recorded is None:  # a version that exists is not stored again
+                self.recorded = json.loads(params[1])
+            return Result([])
+        if query == windcore.RULE_SQL:
             return Result([(self.recorded,)] if self.recorded is not None else [])
         raise AssertionError(query)
 
@@ -346,10 +351,11 @@ def test_a_build_classifies_every_fact_and_records_rules_inputs_and_hash() -> No
     assert db.seen["facts"]["osm_versions"] == [7]
     assert db.seen["facts"]["states"] == ["05"]
     assert db.seen["facts"]["admin_version"] == 5
-    version, parameters, versions, counts, digest, isolation = db.seen["build"]
+    version, versions, counts, digest, isolation = db.seen["build"]
     assert version == "0.0.1"
     assert isolation == "repeatable read"
-    assert json.loads(parameters)["confirm_m"] == 25
+    assert db.seen["rules"][0] == "0.0.1"  # the parameters are stored with their version
+    assert json.loads(db.seen["rules"][1])["confirm_m"] == 25
     assert json.loads(versions)["wind_units"] == 11
     assert json.loads(counts)["osm_turbines_without_unit"] == 4
     assert digest == result.content_hash
@@ -410,7 +416,7 @@ def test_a_build_that_must_have_one_snapshot_gets_it_on_an_idle_connection() -> 
 def test_a_rules_version_with_other_parameters_is_refused() -> None:
     db = Database([fact("SEE1", "In Betrieb", "POINT(1 2)")])
     db.recorded = dataclasses.replace(RULES, confirm_m=30).parameters()
-    with pytest.raises(CoreError, match=r"0\.0\.1 was built with other parameters"):
+    with pytest.raises(CoreError, match=r"0\.0\.1 exists with other parameters"):
         windcore.build_wind_units(db, RULES)  # type: ignore[arg-type]
     assert "build" not in db.seen
 

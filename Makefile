@@ -86,6 +86,9 @@ windcore: ## build the core wind units: position quality and scenarios ($(ENV))
 exit-check: ## judge every data layer, store the report, fail on an error ($(ENV))
 > $(PY) -m cabler.pipeline exitcheck $(ENV)
 
+dictionary: ## write docs/data-dictionary.md from the comments in the database ($(ENV))
+> $(PY) -m cabler.pipeline dictionary $(ENV)
+
 queue: ## substations a person should look at: make queue [TIER=A] [LIMIT=20] ($(ENV))
 > $(PY) -m cabler.pipeline queue $(ENV) $(if $(TIER),--tier $(TIER),) $(if $(LIMIT),--limit $(LIMIT),)
 

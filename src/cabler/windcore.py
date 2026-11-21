@@ -294,15 +294,16 @@ SELECT count(*),
 FROM single
 """
 )
-# A rules version names one set of parameters, as for the substations: the same version with other
-# parameters is refused.
-RULES_SQL = (
-    "SELECT parameters FROM core.wind_build WHERE rules_version = %s ORDER BY wind_build_id LIMIT 1"
+# A rules version names one set of parameters: the version is the key of core.wind_rule_set, so
+# a second set of parameters for it cannot be stored, not even by two builds at the same time.
+RULE_INSERT_SQL = (
+    "INSERT INTO core.wind_rule_set (version, parameters) VALUES (%s, %s::jsonb)"
+    " ON CONFLICT (version) DO NOTHING"
 )
+RULE_SQL = "SELECT parameters FROM core.wind_rule_set WHERE version = %s"
 BUILD_SQL = """
-INSERT INTO core.wind_build
-    (rules_version, parameters, source_versions, counts, content_hash, isolation)
-VALUES (%s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s) RETURNING wind_build_id
+INSERT INTO core.wind_build (rules_version, source_versions, counts, content_hash, isolation)
+VALUES (%s, %s::jsonb, %s::jsonb, %s, %s) RETURNING wind_build_id
 """
 INSERT_SQL = """
 INSERT INTO core.wind_unit
@@ -435,6 +436,16 @@ def _insert_values(build_id: int, r: Row) -> tuple[Any, ...]:
     )
 
 
+def register_wind_rules(conn: psycopg.Connection[Any], rules: WindRules) -> None:
+    """Store the rules version with its parameters; a version that exists with others is refused."""
+    wanted = rules.parameters()
+    conn.execute(RULE_INSERT_SQL, (rules.version, json.dumps(wanted)))
+    row = conn.execute(RULE_SQL, (rules.version,)).fetchone()
+    if row is None or row[0] != wanted:
+        msg = f"rules version {rules.version} exists with other parameters; use a new version"
+        raise CoreError(msg)
+
+
 @dataclass(frozen=True)
 class WindBuildResult:
     build_id: int
@@ -464,12 +475,7 @@ def build_wind_units(
         if require_snapshot and isolation not in ("repeatable read", "serializable"):
             msg = f"the build needs one snapshot, but its transaction runs at '{isolation}'"
             raise CoreError(msg)
-        recorded = conn.execute(RULES_SQL, (rules.version,)).fetchone()
-        if recorded is not None and recorded[0] != rules.parameters():
-            msg = (
-                f"rules version {rules.version} was built with other parameters; use a new version"
-            )
-            raise CoreError(msg)
+        register_wind_rules(conn, rules)
         # every source is validated exactly as for the substations: no verdict or a quarantined
         # snapshot stops the build; the register of the units is one of them
         versions = core.validated_sources(conn, {*rules.states, rules.wind_source})
@@ -487,7 +493,6 @@ def build_wind_units(
             BUILD_SQL,
             (
                 rules.version,
-                json.dumps(rules.parameters()),
                 json.dumps(versions),
                 json.dumps(counts),
                 digest,

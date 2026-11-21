@@ -220,8 +220,9 @@ def test_a_rebuild_from_the_same_inputs_gives_the_same_hash_and_a_change_gives_a
         assert second.build_id > first.build_id
         assert second.content_hash == first.content_hash
         row = conn.execute(
-            "SELECT rules_version, parameters ->> 'confirm_m', counts ->> 'units'"
-            " FROM core.wind_build WHERE wind_build_id = %s",
+            "SELECT b.rules_version, r.parameters ->> 'confirm_m', b.counts ->> 'units'"
+            " FROM core.wind_build b JOIN core.wind_rule_set r ON r.version = b.rules_version"
+            " WHERE b.wind_build_id = %s",
             (second.build_id,),
         ).fetchone()
         assert row == ("0.0.1", "25", "9")
@@ -309,7 +310,7 @@ def test_a_rules_version_cannot_be_reused_with_other_parameters(tmp_path: Path) 
         stage_units_turbines_and_boundaries(conn, tmp_path)
         windcore.build_wind_units(conn, RULES)
         other = dataclasses.replace(RULES, confirm_m=30)  # the same version, other parameters
-        with pytest.raises(CoreError, match="was built with other parameters"), conn.transaction():
+        with pytest.raises(CoreError, match="exists with other parameters"), conn.transaction():
             windcore.build_wind_units(conn, other)
         assert windcore.build_wind_units(conn, RULES).isolation == "read committed"  # the outer one
 
@@ -329,18 +330,55 @@ def test_the_application_role_cannot_change_a_build(tmp_path: Path) -> None:
 
 def test_the_owner_is_refused_too_by_a_trigger() -> None:
     with db.connect("owner") as conn, conn.transaction(force_rollback=True):
+        conn.execute("INSERT INTO core.wind_rule_set (version, parameters) VALUES ('0.0.9', '{}')")
         conn.execute(
-            "INSERT INTO core.wind_build"
-            " (rules_version, parameters, source_versions, counts, content_hash)"
-            " VALUES ('0.0.1', '{}', '{}', '{}', repeat('a', 64))"
+            "INSERT INTO core.wind_build (rules_version, source_versions, counts, content_hash)"
+            " VALUES ('0.0.9', '{}', '{}', repeat('a', 64))"
         )
         for statement in (
             "UPDATE core.wind_build SET counts = '{}'",
             "DELETE FROM core.wind_build",
             "TRUNCATE core.wind_build CASCADE",
+            "UPDATE core.wind_rule_set SET parameters = '{}'",
+            "DELETE FROM core.wind_rule_set",
+            "TRUNCATE core.wind_rule_set CASCADE",
         ):
             with (
                 pytest.raises(psycopg.errors.RestrictViolation, match="append-only"),
                 conn.transaction(),
             ):
                 conn.execute(statement)  # type: ignore[arg-type]
+
+
+def test_a_build_stores_its_rules_once_and_the_application_role_cannot_change_them(
+    tmp_path: Path,
+) -> None:
+    with db.connect("app") as conn, conn.transaction(force_rollback=True):
+        stage_units_turbines_and_boundaries(conn, tmp_path)
+        windcore.build_wind_units(conn, RULES)
+        windcore.build_wind_units(conn, RULES)
+        stored = conn.execute(
+            "SELECT count(*), min(parameters ->> 'farm_gap_m') FROM core.wind_rule_set"
+            " WHERE version = %s",
+            (RULES.version,),
+        ).fetchone()
+        assert stored == (1, "5000")  # two builds, one version
+        for statement in (
+            "UPDATE core.wind_rule_set SET parameters = '{}'",
+            "DELETE FROM core.wind_rule_set",
+            "TRUNCATE core.wind_rule_set",
+        ):
+            with pytest.raises(psycopg.errors.InsufficientPrivilege), conn.transaction():
+                conn.execute(statement)  # type: ignore[arg-type]
+
+
+def test_a_build_cannot_name_a_rules_version_that_was_never_stored() -> None:
+    with (
+        db.connect("owner") as conn,
+        conn.transaction(force_rollback=True),
+        pytest.raises(psycopg.errors.ForeignKeyViolation),
+    ):
+        conn.execute(
+            "INSERT INTO core.wind_build (rules_version, source_versions, counts, content_hash)"
+            " VALUES ('9.9.9', '{}', '{}', repeat('a', 64))"
+        )

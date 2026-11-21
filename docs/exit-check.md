@@ -9,7 +9,7 @@ For every source in every layer, over the **current** rows:
 
 | check | finds | severity |
 | --- | --- | --- |
-| `geometry_missing` | rows without a geometry | error (a warning for the register of wind units, which has none for some units) |
+| `geometry_missing` | rows without a geometry, or with an empty one | error (a warning for the register of wind units, which has none for some units) |
 | `crs_not_25832` | a geometry in another reference system | error |
 | `geometry_invalid` | a geometry that is not valid after the repair of the apply stage | error (with `--fast` it is stored as skipped, see below) |
 | `outside_germany` | a geometry that is not completely inside the envelope of Germany | warning, error above 1% of the source |
